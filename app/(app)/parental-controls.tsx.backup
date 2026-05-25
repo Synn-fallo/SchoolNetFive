@@ -1,0 +1,452 @@
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Switch, TextInput } from 'react-native';
+import { useAuth } from '@/contexts/AuthContext';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Card } from '@/components/Card';
+
+export default function ParentalControlsScreen() {
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [controls, setControls] = useState<any[]>([]);
+  const [selectedControl, setSelectedControl] = useState<any>(null);
+  const [editMode, setEditMode] = useState(false);
+
+  useEffect(() => {
+    loadParentalControls();
+  }, [user]);
+
+  const loadParentalControls = async () => {
+    try {
+      setLoading(true);
+      const { data } = await supabase
+        .from('parental_controls')
+        .select('*')
+        .eq('parent_id', user?.id);
+
+      setControls(data || []);
+      if (data && data.length > 0) {
+        setSelectedControl(data[0]);
+      }
+    } catch (error) {
+      console.error('Error loading parental controls:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveControl = async (control: any) => {
+    try {
+      const { error } = await supabase
+        .from('parental_controls')
+        .update(control)
+        .eq('id', control.id);
+
+      if (!error) {
+        setEditMode(false);
+        loadParentalControls();
+      }
+    } catch (error) {
+      console.error('Error saving parental control:', error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3B82F6" />
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Contrôles parentaux</Text>
+      </View>
+
+      {controls.length > 0 ? (
+        <>
+          <View style={styles.controlsList}>
+            {controls.map((control: any) => (
+              <TouchableOpacity
+                key={control.id}
+                style={[
+                  styles.controlCard,
+                  selectedControl?.id === control.id && styles.activeControlCard,
+                ]}
+                onPress={() => {
+                  setSelectedControl(control);
+                  setEditMode(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.controlName,
+                    selectedControl?.id === control.id && styles.activeControlName,
+                  ]}
+                >
+                  Enfant {control.id.slice(0, 8)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {selectedControl && (
+            <>
+              <Card style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <Text style={styles.cardTitle}>Mode d'accès</Text>
+                  {!editMode && (
+                    <TouchableOpacity onPress={() => setEditMode(true)}>
+                      <Text style={styles.editButton}>Modifier</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {editMode ? (
+                  <>
+                    <View style={styles.modeContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.modeButton,
+                          selectedControl.access_mode === 'libre' && styles.activeModeButton,
+                        ]}
+                        onPress={() =>
+                          setSelectedControl({ ...selectedControl, access_mode: 'libre' })
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.modeButtonText,
+                            selectedControl.access_mode === 'libre' && styles.activeModeButtonText,
+                          ]}
+                        >
+                          Libre
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.modeButton,
+                          selectedControl.access_mode === 'controle' && styles.activeModeButton,
+                        ]}
+                        onPress={() =>
+                          setSelectedControl({ ...selectedControl, access_mode: 'controle' })
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.modeButtonText,
+                            selectedControl.access_mode === 'controle' &&
+                              styles.activeModeButtonText,
+                          ]}
+                        >
+                          Contrôlé
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.modeButton,
+                          selectedControl.access_mode === 'differe' && styles.activeModeButton,
+                        ]}
+                        onPress={() =>
+                          setSelectedControl({ ...selectedControl, access_mode: 'differe' })
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.modeButtonText,
+                            selectedControl.access_mode === 'differe' &&
+                              styles.activeModeButtonText,
+                          ]}
+                        >
+                          Différé
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {selectedControl.access_mode === 'differe' && (
+                      <View style={styles.delayContainer}>
+                        <Text style={styles.delayLabel}>Délai (heures):</Text>
+                        <TextInput
+                          style={styles.delayInput}
+                          value={String(selectedControl.differe_delay_hours)}
+                          onChangeText={(value) =>
+                            setSelectedControl({
+                              ...selectedControl,
+                              differe_delay_hours: parseInt(value) || 48,
+                            })
+                          }
+                          keyboardType="numeric"
+                        />
+                      </View>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.saveButton}
+                      onPress={() => handleSaveControl(selectedControl)}
+                    >
+                      <Text style={styles.saveButtonText}>Sauvegarder</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <View style={styles.infoRow}>
+                    <Text style={styles.label}>Mode actuel:</Text>
+                    <Text style={styles.value}>{selectedControl.access_mode}</Text>
+                  </View>
+                )}
+              </Card>
+
+              <Card style={styles.card}>
+                <Text style={styles.cardTitle}>Restrictions</Text>
+
+                <View style={styles.restrictionItem}>
+                  <Text style={styles.restrictionLabel}>Forums</Text>
+                  <Switch
+                    value={selectedControl.restrictions?.forums || false}
+                    onValueChange={(value) =>
+                      setSelectedControl({
+                        ...selectedControl,
+                        restrictions: {
+                          ...selectedControl.restrictions,
+                          forums: value,
+                        },
+                      })
+                    }
+                    disabled={!editMode}
+                  />
+                </View>
+
+                <View style={styles.restrictionItem}>
+                  <Text style={styles.restrictionLabel}>Publications</Text>
+                  <Switch
+                    value={selectedControl.restrictions?.publications || false}
+                    onValueChange={(value) =>
+                      setSelectedControl({
+                        ...selectedControl,
+                        restrictions: {
+                          ...selectedControl.restrictions,
+                          publications: value,
+                        },
+                      })
+                    }
+                    disabled={!editMode}
+                  />
+                </View>
+
+                <View style={styles.restrictionItem}>
+                  <Text style={styles.restrictionLabel}>Amis</Text>
+                  <Switch
+                    value={selectedControl.restrictions?.amis || false}
+                    onValueChange={(value) =>
+                      setSelectedControl({
+                        ...selectedControl,
+                        restrictions: {
+                          ...selectedControl.restrictions,
+                          amis: value,
+                        },
+                      })
+                    }
+                    disabled={!editMode}
+                  />
+                </View>
+
+                <View style={styles.restrictionItem}>
+                  <Text style={styles.restrictionLabel}>Accès IA</Text>
+                  <Switch
+                    value={selectedControl.restrictions?.ia_access || false}
+                    onValueChange={(value) =>
+                      setSelectedControl({
+                        ...selectedControl,
+                        restrictions: {
+                          ...selectedControl.restrictions,
+                          ia_access: value,
+                        },
+                      })
+                    }
+                    disabled={!editMode}
+                  />
+                </View>
+
+                <View style={styles.restrictionItem}>
+                  <Text style={styles.restrictionLabel}>Marketplace</Text>
+                  <Switch
+                    value={selectedControl.restrictions?.marketplace || false}
+                    onValueChange={(value) =>
+                      setSelectedControl({
+                        ...selectedControl,
+                        restrictions: {
+                          ...selectedControl.restrictions,
+                          marketplace: value,
+                        },
+                      })
+                    }
+                    disabled={!editMode}
+                  />
+                </View>
+              </Card>
+            </>
+          )}
+        </>
+      ) : (
+        <Card style={styles.card}>
+          <Text style={styles.emptyText}>Aucun enfant enregistré</Text>
+        </Card>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  header: {
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  controlsList: {
+    flexDirection: 'row',
+    marginBottom: 20,
+    gap: 8,
+  },
+  controlCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#E5E7EB',
+  },
+  activeControlCard: {
+    backgroundColor: '#3B82F6',
+  },
+  controlName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  activeControlName: {
+    color: '#FFFFFF',
+  },
+  card: {
+    marginBottom: 16,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  editButton: {
+    fontSize: 14,
+    color: '#3B82F6',
+    fontWeight: '600',
+  },
+  modeContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+  },
+  activeModeButton: {
+    backgroundColor: '#3B82F6',
+  },
+  modeButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  activeModeButtonText: {
+    color: '#FFFFFF',
+  },
+  delayContainer: {
+    marginBottom: 16,
+  },
+  delayLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 8,
+  },
+  delayInput: {
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  saveButton: {
+    height: 40,
+    backgroundColor: '#3B82F6',
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
+  label: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  value: {
+    fontSize: 14,
+    color: '#1F2937',
+    fontWeight: '600',
+  },
+  restrictionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  restrictionLabel: {
+    fontSize: 14,
+    color: '#1F2937',
+    fontWeight: '500',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+});

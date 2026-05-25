@@ -1,0 +1,390 @@
+// /home/project/components/notes/EleveNotesView.tsx
+// Vue pour les élèves et parents – Consultation des notes personnelles
+
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { Card } from '@/components/Card';
+import NoteGraph from '@/components/notes/NoteGraph';
+import NoteStats from '@/components/notes/NoteStats';
+import { FileText, BookOpen, TrendingUp, Calendar } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+interface NoteData {
+  id: string;
+  note: number;
+  created_at: string;
+  devoir?: {
+    titre: string;
+    date_devoir: string;
+    note_sur: number;
+    matiere?: {
+      id: string;
+      nom: string;
+      coefficient: number;
+    };
+  };
+}
+
+interface DevoirData {
+  id: string;
+  titre: string;
+  date_devoir: string;
+  coefficient: number;
+  note_sur: number;
+  matiere?: { nom: string };
+}
+
+export default function EleveNotesView() {
+  const { user, profile, primaryRole } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [notes, setNotes] = useState<NoteData[]>([]);
+  const [devoirs, setDevoirs] = useState<DevoirData[]>([]);
+  const [eleveInfo, setEleveInfo] = useState<{ classe_nom?: string; eleve_nom?: string }>({});
+
+  const loadData = useCallback(async () => {
+    if (!user) return;
+
+    setLoading(true);
+    try {
+      if (primaryRole === 'eleve') {
+        // Récupérer les infos de l'élève
+        const { data: eleve } = await supabase
+          .from('eleves')
+          .select('*, classe:classe_id(nom)')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (eleve) {
+          setEleveInfo({
+            classe_nom: (eleve.classe as any)?.nom,
+            eleve_nom: `${profile?.prenom} ${profile?.nom}`,
+          });
+
+          // Récupérer les notes
+          const { data: notesData } = await supabase
+            .from('notes')
+            .select(`
+              id,
+              note,
+              created_at,
+              devoir:devoir_id(
+                id,
+                titre,
+                date_devoir,
+                note_sur,
+                matiere:matiere_id(id, nom, coefficient)
+              )
+            `)
+            .eq('eleve_id', eleve.id)
+            .in('statut', ['publiee', 'livree', 'revisee'])
+            .order('created_at', { ascending: false });
+
+          setNotes(notesData as NoteData[] || []);
+
+          // Récupérer les devoirs à venir
+          const { data: devoirsData } = await supabase
+            .from('devoirs')
+            .select('id, titre, date_devoir, coefficient, note_sur, matiere:matiere_id(nom)')
+            .eq('classe_id', eleve.classe_id)
+            .eq('is_published', true)
+            .gte('date_devoir', new Date().toISOString().split('T')[0])
+            .order('date_devoir', { ascending: true });
+
+          setDevoirs(devoirsData as DevoirData[] || []);
+        }
+      } else if (primaryRole === 'parent') {
+        // Pour les parents, prendre le premier enfant
+        const { data: eleves } = await supabase
+          .from('eleves')
+          .select('*, classe:classe_id(nom)')
+          .eq('parent_id', user.id)
+          .limit(1);
+
+        if (eleves && eleves.length > 0) {
+          const eleve = eleves[0];
+          setEleveInfo({
+            classe_nom: (eleve.classe as any)?.nom,
+            eleve_nom: `${eleve.matricule || 'Mon enfant'}`,
+          });
+
+          const { data: notesData } = await supabase
+            .from('notes')
+            .select(`
+              id,
+              note,
+              created_at,
+              devoir:devoir_id(
+                id,
+                titre,
+                date_devoir,
+                note_sur,
+                matiere:matiere_id(id, nom, coefficient)
+              )
+            `)
+            .eq('eleve_id', eleve.id)
+            .in('statut', ['publiee', 'livree', 'revisee'])
+            .order('created_at', { ascending: false });
+
+          setNotes(notesData as NoteData[] || []);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading eleve notes:', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user, profile, primaryRole]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadData();
+  }, [loadData]);
+
+  const noteStats = useMemo(() => {
+    if (notes.length === 0) return null;
+    
+    const valeurs = notes.map(n => n.note);
+    const somme = valeurs.reduce((a, b) => a + b, 0);
+    const moyenne = somme / valeurs.length;
+    
+    const sorted = [...valeurs].sort((a, b) => a - b);
+    const mediane = sorted.length % 2 === 0
+      ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+      : sorted[Math.floor(sorted.length / 2)];
+    
+    const variance = valeurs.reduce((acc, val) => acc + Math.pow(val - moyenne, 2), 0) / valeurs.length;
+    const ecartType = Math.sqrt(variance);
+    const min = Math.min(...valeurs);
+    const max = Math.max(...valeurs);
+    
+    return {
+      moyenne: Math.round(moyenne * 100) / 100,
+      mediane: Math.round(mediane * 100) / 100,
+      ecartType: Math.round(ecartType * 100) / 100,
+      min,
+      max,
+      nombreNotes: valeurs.length,
+    };
+  }, [notes]);
+
+  const chartData = useMemo(() => {
+    if (notes.length === 0) return [];
+    
+    const sortedNotes = [...notes].sort((a, b) => 
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    
+    return sortedNotes.map(note => ({
+      date: new Date(note.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }),
+      note: note.note,
+      sur: note.devoir?.note_sur || 20,
+      matiere: note.devoir?.matiere?.nom || 'Devoir',
+      titre: note.devoir?.titre || 'Devoir',
+    }));
+  }, [notes]);
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement de vos notes...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[theme.colors.primary.DEFAULT]} />
+      }
+    >
+      <View style={styles.header}>
+        <Text style={styles.title}>Mes notes</Text>
+        {eleveInfo.classe_nom && (
+          <Text style={styles.subtitle}>Classe : {eleveInfo.classe_nom}</Text>
+        )}
+      </View>
+
+      {chartData.length > 0 && (
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>📈 Évolution des notes</Text>
+          <NoteGraph data={chartData} />
+        </Card>
+      )}
+
+      {noteStats && (
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>📊 Statistiques</Text>
+          <NoteStats stats={noteStats} />
+        </Card>
+      )}
+
+      {notes.length > 0 ? (
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>📝 Détail des notes</Text>
+          {notes.map((note) => (
+            <View key={note.id} style={styles.noteItem}>
+              <View style={styles.noteInfo}>
+                <Text style={styles.noteTitle}>{note.devoir?.titre || 'Devoir'}</Text>
+                <Text style={styles.noteSubtitle}>
+                  {note.devoir?.matiere?.nom} • {new Date(note.created_at).toLocaleDateString('fr-FR')}
+                </Text>
+              </View>
+              <View style={styles.noteScore}>
+                <Text style={[
+                  styles.score,
+                  { color: note.note >= (note.devoir?.note_sur || 20) / 2 ? '#10B981' : '#EF4444' }
+                ]}>
+                  {note.note}
+                </Text>
+                <Text style={styles.scoreMax}>/{note.devoir?.note_sur || 20}</Text>
+              </View>
+            </View>
+          ))}
+        </Card>
+      ) : (
+        <Card style={styles.card}>
+          <Text style={styles.emptyText}>Aucune note disponible</Text>
+        </Card>
+      )}
+
+      {devoirs.length > 0 && (
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>📚 Devoirs à venir</Text>
+          {devoirs.slice(0, 5).map((devoir) => (
+            <View key={devoir.id} style={styles.devoirItem}>
+              <View style={styles.devoirInfo}>
+                <Text style={styles.devoirTitle}>{devoir.titre}</Text>
+                <Text style={styles.devoirDate}>
+                  {new Date(devoir.date_devoir).toLocaleDateString('fr-FR')}
+                </Text>
+              </View>
+              <View>
+                <Text style={styles.devoirMeta}>Coeff: {devoir.coefficient}</Text>
+              </View>
+            </View>
+          ))}
+        </Card>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  header: {
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  card: {
+    marginBottom: 16,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  noteItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  noteInfo: {
+    flex: 1,
+  },
+  noteTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  noteSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  noteScore: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  score: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginRight: 4,
+  },
+  scoreMax: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  devoirItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  devoirInfo: {
+    flex: 1,
+  },
+  devoirTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  devoirDate: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  devoirMeta: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+});

@@ -1,0 +1,533 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Modal } from 'react-native';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'expo-router';
+import { supabase } from '@/lib/supabase';
+import { Plus, Search, Edit2, Trash2, Check, X, Building2, Users, Eye } from 'lucide-react-native';
+import { Card } from '@/components/Card';
+import theme from '@/constants/theme';
+import { useAuth } from '@/contexts/AuthContext';
+
+interface Etablissement {
+  id: string;
+  nom: string;
+  code: string;
+  type: string;
+  ville: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export default function EtablissementsScreen() {
+  const router = useRouter();
+  const { hasRole } = useAuth();
+  const [etablissements, setEtablissements] = useState<Etablissement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [modalVisible, setModalVisible] = useState(false);
+  const [editingEtablissement, setEditingEtablissement] = useState<Etablissement | null>(null);
+  const [formData, setFormData] = useState({
+    nom: '',
+    code: '',
+    type: '',
+    ville: '',
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  const isAdmin = hasRole('admin');
+
+  useEffect(() => {
+    if (isAdmin) {
+      loadEtablissements();
+    }
+  }, [isAdmin]);
+
+  const loadEtablissements = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('etablissements')
+        .select('*')
+        .order('nom', { ascending: true });
+
+      if (error) throw error;
+      setEtablissements(data || []);
+    } catch (error) {
+      console.error('Error loading etablissements:', error);
+      Alert.alert('Erreur', 'Impossible de charger les établissements');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.nom) {
+      Alert.alert('Erreur', 'Le nom est obligatoire');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (editingEtablissement) {
+        const { error } = await supabase
+          .from('etablissements')
+          .update({
+            nom: formData.nom,
+            code: formData.code || null,
+            type: formData.type || null,
+            ville: formData.ville || null,
+          })
+          .eq('id', editingEtablissement.id);
+
+        if (error) throw error;
+        Alert.alert('Succès', 'Établissement modifié');
+      } else {
+        const { error } = await supabase
+          .from('etablissements')
+          .insert({
+            nom: formData.nom,
+            code: formData.code || null,
+            type: formData.type || null,
+            ville: formData.ville || null,
+            is_active: true,
+          });
+
+        if (error) throw error;
+        Alert.alert('Succès', 'Établissement créé');
+      }
+
+      setModalVisible(false);
+      resetForm();
+      loadEtablissements();
+    } catch (error) {
+      console.error('Error saving etablissement:', error);
+      Alert.alert('Erreur', 'Impossible d\'enregistrer l\'établissement');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (id: string, nom: string) => {
+    Alert.alert(
+      'Confirmation',
+      `Voulez-vous vraiment supprimer l'établissement "${nom}" ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('etablissements')
+                .delete()
+                .eq('id', id);
+
+              if (error) throw error;
+              Alert.alert('Succès', 'Établissement supprimé');
+              loadEtablissements();
+            } catch (error) {
+              console.error('Error deleting etablissement:', error);
+              Alert.alert('Erreur', 'Impossible de supprimer l\'établissement');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleView = (etablissementId: string) => {
+    router.push(`/(app)/etablissement/${etablissementId}`);
+  };
+
+  const resetForm = () => {
+    setFormData({ nom: '', code: '', type: '', ville: '' });
+    setEditingEtablissement(null);
+  };
+
+  const openCreateModal = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const openEditModal = (etablissement: Etablissement) => {
+    setEditingEtablissement(etablissement);
+    setFormData({
+      nom: etablissement.nom,
+      code: etablissement.code || '',
+      type: etablissement.type || '',
+      ville: etablissement.ville || '',
+    });
+    setModalVisible(true);
+  };
+
+  // ✅ Correction : utilisation de l'opérateur ? pour éviter les null/undefined
+  const filteredEtablissements = etablissements.filter(
+    (e) =>
+      e.nom?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      e.code?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  if (!isAdmin) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>Accès non autorisé</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <Text style={styles.backButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>🏫 Établissements</Text>
+        <TouchableOpacity style={styles.addButton} onPress={openCreateModal}>
+          <Plus size={20} color="#FFFFFF" />
+          <Text style={styles.addButtonText}>Ajouter</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.searchContainer}>
+        <Search size={20} color={theme.colors.neutral[400]} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Rechercher un établissement..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholderTextColor={theme.colors.neutral[400]}
+        />
+      </View>
+
+      {loading ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.loadingText}>Chargement...</Text>
+        </View>
+      ) : filteredEtablissements.length === 0 ? (
+        <View style={styles.centerContainer}>
+          <Text style={styles.emptyText}>Aucun établissement trouvé</Text>
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={styles.listContent}>
+          {filteredEtablissements.map((etablissement) => (
+            <Card key={etablissement.id} style={styles.etablissementCard}>
+              <View style={styles.cardHeader}>
+                <View style={styles.cardIcon}>
+                  <Building2 size={24} color={theme.colors.primary.DEFAULT} />
+                </View>
+                <View style={styles.cardInfo}>
+                  <Text style={styles.etablissementNom}>{etablissement.nom}</Text>
+                  {etablissement.code && (
+                    <Text style={styles.etablissementCode}>Code: {etablissement.code}</Text>
+                  )}
+                  {etablissement.type && (
+                    <Text style={styles.etablissementType}>Type: {etablissement.type}</Text>
+                  )}
+                  {etablissement.ville && (
+                    <Text style={styles.etablissementVille}>Ville: {etablissement.ville}</Text>
+                  )}
+                </View>
+                <View style={styles.cardActions}>
+                  <TouchableOpacity
+                    style={styles.viewButton}
+                    onPress={() => handleView(etablissement.id)}
+                  >
+                    <Eye size={18} color={theme.colors.primary.DEFAULT} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.editButton}
+                    onPress={() => openEditModal(etablissement)}
+                  >
+                    <Edit2 size={18} color={theme.colors.neutral[600]} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={() => handleDelete(etablissement.id, etablissement.nom)}
+                  >
+                    <Trash2 size={18} color="#EF4444" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Card>
+          ))}
+        </ScrollView>
+      )}
+
+      {/* Modal Ajout/Modification */}
+      <Modal
+        visible={modalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>
+              {editingEtablissement ? 'Modifier l\'établissement' : 'Ajouter un établissement'}
+            </Text>
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Nom de l'établissement *"
+              value={formData.nom}
+              onChangeText={(text) => setFormData({ ...formData, nom: text })}
+            />
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Code (optionnel)"
+              value={formData.code}
+              onChangeText={(text) => setFormData({ ...formData, code: text.toUpperCase() })}
+            />
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Type (Lycée, Collège, Primaire...)"
+              value={formData.type}
+              onChangeText={(text) => setFormData({ ...formData, type: text })}
+            />
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Ville"
+              value={formData.ville}
+              onChangeText={(text) => setFormData({ ...formData, ville: text })}
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalCancelButton}
+                onPress={() => setModalVisible(false)}
+              >
+                <Text style={styles.modalCancelButtonText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalSubmitButton, submitting && styles.modalSubmitButtonDisabled]}
+                onPress={handleSubmit}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalSubmitButtonText}>
+                    {editingEtablissement ? 'Modifier' : 'Créer'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  addButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,  // ← réduit les marges latérales
+    marginVertical: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 16,        // ← augmente la taille de police
+    color: '#1F2937',
+    paddingVertical: 8,  // ← ajuste la hauteur interne
+    // Supprime ou commente ces lignes si elles existent :
+    // borderWidth: 1,
+    // borderColor: '#E5E7EB',
+    // borderRadius: 8,
+  },
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  etablissementCard: {
+    padding: 16,
+    marginBottom: 12,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  cardInfo: {
+    flex: 1,
+  },
+  etablissementNom: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  etablissementCode: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  etablissementType: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  etablissementVille: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  viewButton: {
+    padding: 8,
+  },
+  editButton: {
+    padding: 8,
+  },
+  deleteButton: {
+    padding: 8,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#EF4444',
+    marginBottom: 16,
+  },
+  backButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    width: '90%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 16,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#1F2937',
+    backgroundColor: '#F9FAFB',
+    marginBottom: 12,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  modalCancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalCancelButtonText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  modalSubmitButton: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalSubmitButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  modalSubmitButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

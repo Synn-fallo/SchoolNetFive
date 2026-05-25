@@ -1,0 +1,298 @@
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { useAuth } from '@/contexts/AuthContext';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Card } from '@/components/Card';
+import { StatusBadge } from '@/components/StatusBadge';
+
+export default function PaymentsScreen() {
+  const { user, primaryRole } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [inscriptions, setInscriptions] = useState<any[]>([]);
+  const [paiements, setPaiements] = useState<any[]>([]);
+
+  useEffect(() => {
+    loadPaymentsData();
+  }, [user, primaryRole]);
+
+  const loadPaymentsData = async () => {
+    try {
+      setLoading(true);
+
+      if (primaryRole === 'parent') {
+        // Get eleves for parent
+        const { data: eleves } = await supabase
+          .from('eleves')
+          .select('*')
+          .eq('parent_id', user?.id);
+
+        if (eleves && eleves.length > 0) {
+          const eleveIds = eleves.map((e) => e.id);
+
+          // Get inscriptions
+          const { data: inscrData } = await supabase
+            .from('inscriptions')
+            .select('*')
+            .in('eleve_id', eleveIds);
+
+          setInscriptions(inscrData || []);
+
+          // Get paiements
+          if (inscrData && inscrData.length > 0) {
+            const inscriptionIds = inscrData.map((i) => i.id);
+            const { data: paiementData } = await supabase
+              .from('paiements')
+              .select('*')
+              .in('inscription_id', inscriptionIds);
+
+            setPaiements(paiementData || []);
+          }
+        }
+      } else if (primaryRole === 'chef_etablissement') {
+        // Get all inscriptions for establishment
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('etablissement_id')
+          .eq('id', user?.id)
+          .maybeSingle();
+
+        if (profile?.etablissement_id) {
+          const { data: inscrData } = await supabase
+            .from('inscriptions')
+            .select('*')
+            .eq('etablissement_id', profile.etablissement_id);
+
+          setInscriptions(inscrData || []);
+
+          if (inscrData && inscrData.length > 0) {
+            const inscriptionIds = inscrData.map((i) => i.id);
+            const { data: paiementData } = await supabase
+              .from('paiements')
+              .select('*')
+              .in('inscription_id', inscriptionIds);
+
+            setPaiements(paiementData || []);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading payments data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const calculateTotalPayments = () => {
+    return paiements.reduce((sum, p) => sum + p.montant, 0);
+  };
+
+  const calculateTotalDue = () => {
+    return inscriptions.reduce((sum, i) => sum + i.montant_total, 0);
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3B82F6" />
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Paiements</Text>
+      </View>
+
+      {/* Summary Cards */}
+      <View style={styles.summaryContainer}>
+        <Card style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>Montant total dû</Text>
+          <Text style={styles.summaryAmount}>{calculateTotalDue().toFixed(2)}€</Text>
+        </Card>
+        <Card style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>Montant payé</Text>
+          <Text style={[styles.summaryAmount, { color: '#059669' }]}>
+            {calculateTotalPayments().toFixed(2)}€
+          </Text>
+        </Card>
+      </View>
+
+      {/* Inscriptions */}
+      {inscriptions.length > 0 ? (
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Inscriptions</Text>
+          {inscriptions.map((inscription: any) => (
+            <View key={inscription.id} style={styles.itemContainer}>
+              <View style={styles.itemContent}>
+                <Text style={styles.itemTitle}>
+                  Inscription {inscription.id.slice(0, 8)}
+                </Text>
+                <Text style={styles.itemSubtitle}>
+                  Montant: {inscription.montant_total}€ - Payé: {inscription.montant_paye}€
+                </Text>
+              </View>
+              <StatusBadge status={inscription.statut} />
+            </View>
+          ))}
+        </Card>
+      ) : null}
+
+      {/* Paiements */}
+      {paiements.length > 0 ? (
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Historique des paiements</Text>
+          {paiements.map((paiement: any) => (
+            <View key={paiement.id} style={styles.paymentItem}>
+              <View style={styles.paymentInfo}>
+                <Text style={styles.paymentAmount}>{paiement.montant}€</Text>
+                <Text style={styles.paymentDate}>
+                  {new Date(paiement.date_paiement).toLocaleDateString('fr-FR')}
+                </Text>
+              </View>
+              <View style={styles.paymentMode}>
+                <Text style={styles.paymentModeText}>{paiement.mode_paiement}</Text>
+              </View>
+            </View>
+          ))}
+        </Card>
+      ) : null}
+
+      {inscriptions.length === 0 && (
+        <Card style={styles.card}>
+          <Text style={styles.emptyText}>Aucune inscription</Text>
+        </Card>
+      )}
+
+      <TouchableOpacity style={styles.button}>
+        <Text style={styles.buttonText}>Effectuer un paiement</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  header: {
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  summaryContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+  summaryCard: {
+    flex: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  summaryLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 8,
+  },
+  summaryAmount: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#EF4444',
+  },
+  card: {
+    marginBottom: 16,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  itemContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  itemContent: {
+    flex: 1,
+  },
+  itemTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  itemSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  paymentItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  paymentInfo: {
+    flex: 1,
+  },
+  paymentAmount: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#059669',
+    marginBottom: 4,
+  },
+  paymentDate: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  paymentMode: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 4,
+  },
+  paymentModeText: {
+    fontSize: 12,
+    color: '#3B82F6',
+    fontWeight: '500',
+  },
+  button: {
+    height: 48,
+    backgroundColor: '#3B82F6',
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+});

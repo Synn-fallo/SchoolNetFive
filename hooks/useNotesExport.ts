@@ -1,0 +1,1134 @@
+// /home/project/hooks/useNotesExport.ts
+// Hook pour l'export des données de notes (Excel/PDF avec options personnalisables)
+
+import { useState, useCallback } from 'react';
+import { Alert } from 'react-native';
+import { supabase } from '@/lib/supabase';
+import { useSubscriptionCheck } from './useSubscriptionCheck';
+// import { useDocumentGeneration, GenerateRapportParams, GenerateTableauHonneurParams, GenerateBulletinParams, GenerateClassePDFParams, GenerateMatierePDFParams } from './useDocumentGeneration';
+import { useDocumentGeneration, GenerateRapportParams, GenerateTableauHonneurParams, GenerateBulletinParams, GenerateClassePDFParams, GenerateMatierePDFParams } from './useDocumentGenerationV2';
+
+import { Periode } from '@/types/notes.types';
+import { ExportOptions } from '@/types/export.types';
+import { ExportColumn, DEFAULT_CLASSE_COLUMNS, DEFAULT_MATIERE_COLUMNS } from '@/types/exportColumns.types';
+import { 
+  getClasseExportData, 
+  getMatiereExportData, 
+  getPeriodeExportData,
+  getTableauHonneurExportData,
+  getBulletinExportData
+} from '@/utils/exportDataGetters';
+
+interface UseNotesExportReturn {
+  isExporting: boolean;
+  error: string | null;
+  exportToExcel: (params: ExportParams) => Promise<boolean>;
+  generateRapport: (params: RapportParams) => Promise<boolean>;
+  generateTableauHonneur: (params: TableauParams) => Promise<boolean>;
+  generateBulletin: (params: BulletinParams) => Promise<boolean>;
+  generateBulletinsBatch?: (eleveIds: string[], periodeId: string, onProgress?: (current: number, total: number, eleveNom?: string) => void) => Promise<boolean>;
+  generateExportClassePDF: (params: GenerateClassePDFParams) => Promise<boolean>;
+  generateExportMatierePDF: (params: GenerateMatierePDFParams) => Promise<boolean>;
+  generateExportClassePDFPreview: (params: GenerateClassePDFParams) => Promise<string | null>;
+  generateExportMatierePDFPreview: (params: GenerateMatierePDFParams) => Promise<string | null>;
+  generateRapportPreview: (params: GenerateRapportParams) => Promise<string | null>;
+  isSubscribed: boolean | null;
+  subscriptionLoading: boolean;
+  getPreviewData: (params: ExportParams) => Promise<any>;
+}
+
+export interface ExportParams {
+  type: 'classes' | 'matieres' | 'eleves' | 'rapport' | 'tableauHonneur';
+  etablissementId: string;
+  anneeScolaireId: string;
+  periode: Periode;
+  classeId?: string;
+  classeNom?: string;
+  matiereId?: string;
+  matiereNom?: string;
+  format: 'pdf' | 'excel';
+  seuilMoyenne?: number;
+  topN?: number;
+  orientation?: 'portrait' | 'landscape';
+}
+
+export interface RapportParams {
+  etablissementId: string;
+  etablissementNom: string;
+  anneeScolaireId: string;
+  anneeScolaireLibelle: string;
+  periodeLabel: string;
+  classeId?: string;
+  inclureTableauHonneur: boolean;
+  format: 'pdf' | 'excel';
+  orientation?: 'portrait' | 'landscape';
+}
+
+export interface TableauParams {
+  etablissementId: string;
+  etablissementNom: string;
+  anneeScolaireId: string;
+  anneeScolaireLibelle: string;
+  periodeLabel: string;
+  classeId?: string;
+  seuilMoyenne: number;
+  topN: number;
+  format: 'pdf' | 'excel';
+  orientation?: 'portrait' | 'landscape';
+}
+
+export interface BulletinParams {
+  eleveId: string;
+  etablissementId: string;
+  anneeScolaireId: string;
+  periodeId: string;
+  periodeLabel?: string;
+  orientation?: 'portrait' | 'landscape';
+}
+
+export function useNotesExport(etablissementId: string, anneeScolaireId: string): UseNotesExportReturn {
+  const [isExporting, setIsExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { isSubscribed, loading: subscriptionLoading, plan } = useSubscriptionCheck(etablissementId);
+  
+  const {
+    generating: pdfGenerating,
+    error: pdfError,
+    generateRapportPDF,
+    generateTableauHonneurPDF,
+    generateBulletinPDF,
+    generateClassePDF,
+    generateMatierePDF,
+  } = useDocumentGeneration();
+
+  // ============================================================
+  // RÉCUPÉRATION DES DONNÉES DE PRÉVISUALISATION
+  // ============================================================
+
+  const getPreviewData = useCallback(async (params: ExportParams): Promise<any> => {
+    if (!isSubscribed) {
+      return null;
+    }
+
+    try {
+      console.log('🔍 getPreviewData - params:', params);
+      
+      if (params.type === 'eleves' && params.classeId) {
+        const data = await getClasseExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          params.classeId,
+          params.periode
+        );
+        console.log('🔍 getPreviewData - classe data:', data);
+        return data;
+      } 
+      else if (params.type === 'matieres' && params.matiereId && params.classeId) {
+        const data = await getMatiereExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          params.classeId,
+          params.matiereId,
+          params.periode
+        );
+        console.log('🔍 getPreviewData - matiere data:', data);
+        return data;
+      }
+      else if (params.type === 'rapport') {
+        const data = await getPeriodeExportData(
+          params.etablissementId,
+          '',
+          params.anneeScolaireId,
+          params.periode
+        );
+        console.log('🔍 getPreviewData - periode data:', data);
+        return data;
+      }
+      else if (params.type === 'tableauHonneur') {
+        const data = await getTableauHonneurExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          params.periode,
+          params.classeId,
+          params.seuilMoyenne || 14,
+          params.topN || 5
+        );
+        console.log('🔍 getPreviewData - tableau data:', data);
+        return data;
+      }
+      return null;
+    } catch (err) {
+      console.error('Error getting preview data:', err);
+      return null;
+    }
+  }, [isSubscribed]);
+
+  // ============================================================
+  // EXPORT EXCEL (fonctionnel avec données réelles)
+  // ============================================================
+
+  const exportToExcel = useCallback(async (params: ExportParams): Promise<boolean> => {
+    if (!isSubscribed) {
+      setError('Abonnement requis pour exporter');
+      Alert.alert('Abonnement requis', 'L\'export nécessite un abonnement actif.');
+      return false;
+    }
+
+    setIsExporting(true);
+    setError(null);
+
+    try {
+      let csvContent = '';
+      let fileName = '';
+
+      if (params.type === 'eleves' && params.classeId) {
+        const data = await getClasseExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          params.classeId,
+          params.periode
+        );
+
+        if (!data || data.eleves.length === 0) {
+          Alert.alert('Information', 'Aucune donnée à exporter pour cette classe.');
+          return false;
+        }
+
+        const rows: string[] = [];
+        rows.push(`"CLASSE";"${params.classeNom || ''}"`);
+        rows.push(`"PERIODE";"${params.periode === 'S1' ? 'Semestre 1' : params.periode === 'S2' ? 'Semestre 2' : `Trimestre ${params.periode.slice(1)}`}"`);
+        rows.push(`"EFFECTIF";"${data.effectif}"`);
+        rows.push(`"MOYENNE CLASSE";"${data.moyenneClasse}/20"`);
+        rows.push('');
+        rows.push('"LISTE DES ELEVES"');
+        rows.push(`"Rang";"Matricule";"Nom";"Prénom";"Moyenne";"Appréciation"`);
+        
+        for (const eleve of data.eleves) {
+          rows.push(`${eleve.rang};"${eleve.matricule}";"${eleve.nom}";"${eleve.prenom}";${eleve.moyenneGenerale};"${eleve.appreciation}"`);
+          for (const detail of eleve.detailsParMatiere) {
+            rows.push(`;;;"  - ${detail.matiere} (coef ${detail.coefficient}): ${detail.note}/20 (Moy.classe: ${detail.moyenneClasse}/20 - Rang: ${detail.rangMatiere})"`);
+          }
+        }
+        
+        csvContent = rows.join('\n');
+        fileName = `export_classe_${params.classeNom}_${params.periode}.csv`;
+      } 
+      else if (params.type === 'matieres' && params.matiereId && params.classeId) {
+        const data = await getMatiereExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          params.classeId,
+          params.matiereId,
+          params.periode
+        );
+
+        if (!data || data.eleves.length === 0) {
+          Alert.alert('Information', 'Aucune donnée à exporter pour cette matière.');
+          return false;
+        }
+
+        const rows: string[] = [];
+        rows.push(`"MATIERE";"${data.matiereNom} (Coeff. ${data.coefficient})"`);
+        rows.push(`"PERIODE";"${params.periode === 'S1' ? 'Semestre 1' : params.periode === 'S2' ? 'Semestre 2' : `Trimestre ${params.periode.slice(1)}`}"`);
+        rows.push(`"CLASSE";"${params.classeNom || ''}"`);
+        rows.push(`"EFFECTIF";"${data.effectif}"`);
+        rows.push(`"MOYENNE CLASSE";"${data.moyenneClasse}/20"`);
+        rows.push(`"ECART-TYPE";"${data.ecartType}"`);
+        rows.push(`"TAUX REUSSITE";"${data.tauxReussite}%"`);
+        rows.push('');
+        rows.push('"LISTE DES ELEVES"');
+        rows.push(`"Rang";"Matricule";"Nom";"Prénom";"Note";"Appréciation"`);
+        
+        for (const eleve of data.eleves) {
+          rows.push(`${eleve.rang};"${eleve.matricule}";"${eleve.nom}";"${eleve.prenom}";${eleve.note};"${eleve.appreciation}"`);
+        }
+        
+        csvContent = rows.join('\n');
+        fileName = `export_matiere_${params.matiereNom}_${params.periode}.csv`;
+      }
+      else if (params.type === 'rapport') {
+        const data = await getPeriodeExportData(
+          params.etablissementId,
+          '',
+          params.anneeScolaireId,
+          params.periode
+        );
+
+        if (!data) {
+          Alert.alert('Information', 'Aucune donnée à exporter pour cette période.');
+          return false;
+        }
+
+        const rows: string[] = [];
+        rows.push(`"RAPPORT DE FIN DE PERIODE - ${data.periodeLabel}"`);
+        rows.push(`"Date d'édition";"${new Date(data.dateGeneration).toLocaleDateString('fr-FR')}"`);
+        rows.push('');
+        rows.push('"STATISTIQUES GENERALES"');
+        rows.push(`"Total élèves";"${data.statsGlobales.totalEleves}"`);
+        rows.push(`"Moyenne générale";"${data.statsGlobales.moyenneGenerale}/20"`);
+        rows.push(`"Taux de réussite";"${data.statsGlobales.tauxReussite}%"`);
+        rows.push(`"Meilleure classe";"${data.statsGlobales.meilleureClasse.nom} (${data.statsGlobales.meilleureClasse.moyenne}/20)"`);
+        rows.push(`"Classe à améliorer";"${data.statsGlobales.plusFaibleClasse.nom} (${data.statsGlobales.plusFaibleClasse.moyenne}/20)"`);
+        rows.push('');
+        rows.push('"MOYENNES PAR CLASSE"');
+        rows.push(`"Classe";"Effectif";"Moyenne";"Rang";"Taux réussite"`);
+        for (const classe of data.classesStats) {
+          rows.push(`"${classe.nom}";${classe.effectif};${classe.moyenneGenerale};${classe.rang};${classe.tauxReussite}%`);
+        }
+        
+        if (data.tableauHonneur && data.tableauHonneur.length > 0) {
+          rows.push('');
+          rows.push('"TABLEAU D\'HONNEUR"');
+          rows.push(`"Rang";"Classe";"Nom";"Prénom";"Moyenne";"Mention"`);
+          for (const eleve of data.tableauHonneur) {
+            rows.push(`${eleve.rang};"${eleve.classe}";"${eleve.nom}";"${eleve.prenom}";${eleve.moyenne};"${eleve.mention}"`);
+          }
+        }
+        
+        csvContent = rows.join('\n');
+        fileName = `export_periode_${params.periode}.csv`;
+      }
+      else if (params.type === 'tableauHonneur') {
+        const data = await getTableauHonneurExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          params.periode,
+          params.classeId,
+          params.seuilMoyenne || 14,
+          params.topN || 5
+        );
+
+        if (!data || data.eleves.length === 0) {
+          Alert.alert('Information', `Aucun élève n'atteint la moyenne minimale de ${params.seuilMoyenne || 14}/20. Essayez avec un seuil plus bas.`);
+          return false;
+        }
+
+        const rows: string[] = [];
+        rows.push(`"TABLEAU D'HONNEUR - ${data.periodeLabel}"`);
+        rows.push(`"Seuil minimum";"≥ ${data.seuilMoyenne}/20"`);
+        rows.push(`"Top";"${data.topN} élèves"`);
+        if (params.classeNom) {
+          rows.push(`"Classe";"${params.classeNom}"`);
+        }
+        rows.push(`"Date d'édition";"${new Date().toISOString().split('T')[0]}"`);
+        rows.push('');
+        rows.push('"LISTE DES LAUREATS"');
+        rows.push(`"Rang";"Classe";"Matricule";"Nom";"Prénom";"Moyenne";"Mention"`);
+        
+        for (const eleve of data.eleves) {
+          rows.push(`${eleve.rang};"${eleve.classe}";"${eleve.matricule}";"${eleve.nom}";"${eleve.prenom}";${eleve.moyenne};"${eleve.mention}"`);
+        }
+        
+        csvContent = rows.join('\n');
+        fileName = `tableau_honneur_${params.periode}.csv`;
+      }
+      else {
+        Alert.alert('Information', 'Veuillez sélectionner une classe et/ou une matière.');
+        return false;
+      }
+
+      const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      Alert.alert('Succès', 'Export Excel généré avec succès');
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de l\'export Excel');
+      Alert.alert('Erreur', 'L\'export a échoué. Veuillez réessayer.');
+      return false;
+    } finally {
+      setIsExporting(false);
+    }
+  }, [isSubscribed]);
+
+  // ============================================================
+  // GÉNÉRATION RAPPORT (Excel + PDF)
+  // ============================================================
+
+  const generateRapport = useCallback(async (params: RapportParams): Promise<boolean> => {
+    if (!isSubscribed) {
+      setError('Abonnement requis pour générer le rapport');
+      Alert.alert('Abonnement requis', 'La génération de rapport nécessite un abonnement actif.');
+      return false;
+    }
+
+    console.log('🔍 generateRapport - params reçus:', params);
+    console.log('🔍 generateRapport - anneeScolaireId:', params.anneeScolaireId);
+
+    if (params.format === 'excel') {
+      return await exportToExcel({
+        type: 'rapport',
+        etablissementId: params.etablissementId,
+        anneeScolaireId: params.anneeScolaireId,
+        periode: params.periodeLabel === 'Semestre 1' ? 'S1' : params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1',
+        format: 'excel',
+      });
+    } else {
+      // PDF : utiliser la vraie génération
+      try {
+        const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+        
+        const data = await getPeriodeExportData(
+          params.etablissementId,
+          params.etablissementNom,
+          params.anneeScolaireId,
+          periodeKey
+        );
+
+        if (!data) {
+          Alert.alert('Erreur', 'Impossible de récupérer les données pour le rapport. Vérifiez que l\'année scolaire est correcte.');
+          return false;
+        }
+
+        const pdfParams: GenerateRapportParams = {
+          etablissementNom: params.etablissementNom,
+          anneeScolaireLibelle: params.anneeScolaireLibelle,
+          periodeLabel: params.periodeLabel,
+          statsGenerales: {
+            moyenneEtablissement: data.statsGlobales.moyenneGenerale,
+            tauxReussite: data.statsGlobales.tauxReussite,
+            meilleureClasse: data.statsGlobales.meilleureClasse,
+            plusFaibleClasse: data.statsGlobales.plusFaibleClasse,
+          },
+          classesStats: data.classesStats,
+          matieresStats: data.matieresStats,
+          inclureTableauHonneur: params.inclureTableauHonneur,
+          tableauHonneur: params.inclureTableauHonneur ? data.tableauHonneur?.map(e => ({
+            nom: e.nom,
+            prenom: e.prenom,
+            moyenne: e.moyenne,
+            rang: e.rang,
+          })) : [],
+          orientation: params.orientation || 'landscape',
+        };
+
+        const result = await generateRapportPDF(pdfParams);
+        if (result) {
+          Alert.alert('Succès', 'Rapport PDF généré avec succès');
+          return true;
+        } else {
+          Alert.alert('Erreur', 'La génération du PDF a échoué');
+          return false;
+        }
+      } catch (err) {
+        console.error('Error generating rapport PDF:', err);
+        Alert.alert('Erreur', 'Impossible de générer le rapport PDF');
+        return false;
+      }
+    }
+  }, [isSubscribed, exportToExcel, generateRapportPDF]);
+
+  // ============================================================
+  // GÉNÉRATION TABLEAU D'HONNEUR (Excel + PDF)
+  // ============================================================
+
+  const generateTableauHonneur = useCallback(async (params: TableauParams): Promise<boolean> => {
+    if (!isSubscribed) {
+      setError('Abonnement requis pour générer le tableau d\'honneur');
+      Alert.alert('Abonnement requis', 'La génération du tableau d\'honneur nécessite un abonnement actif.');
+      return false;
+    }
+
+    console.log('🔍 generateTableauHonneur - params reçus:', params);
+    console.log('🔍 generateTableauHonneur - anneeScolaireId:', params.anneeScolaireId);
+
+    if (params.format === 'excel') {
+      return await exportToExcel({
+        type: 'tableauHonneur',
+        etablissementId: params.etablissementId,
+        anneeScolaireId: params.anneeScolaireId,
+        periode: params.periodeLabel === 'Semestre 1' ? 'S1' : params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1',
+        classeId: params.classeId,
+        classeNom: params.classeId ? 'Classe sélectionnée' : undefined,
+        seuilMoyenne: params.seuilMoyenne,
+        topN: params.topN,
+        format: 'excel',
+      });
+    } else {
+      // PDF : utiliser la vraie génération
+      try {
+        const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+        
+        const data = await getTableauHonneurExportData(
+          params.etablissementId,
+          params.anneeScolaireId,
+          periodeKey,
+          params.classeId,
+          params.seuilMoyenne,
+          params.topN
+        );
+
+        console.log('🔍 generateTableauHonneur - nb élèves trouvés:', data?.eleves?.length || 0);
+
+        if (!data || data.eleves.length === 0) {
+          Alert.alert(
+            'Tableau d\'honneur',
+            `Aucun élève n'atteint la moyenne minimale de ${params.seuilMoyenne}/20.\n\n💡 Conseil : Essayez avec un seuil plus bas (ex: 10/20) dans les paramètres.`
+          );
+          return false;
+        }
+
+        const pdfParams: GenerateTableauHonneurParams = {
+          etablissementNom: params.etablissementNom,
+          anneeScolaireLibelle: params.anneeScolaireLibelle,
+          periodeLabel: params.periodeLabel,
+          classeNom: params.classeId ? (params.classeId === 'Toutes' ? undefined : 'Classe sélectionnée') : undefined,
+          seuilMoyenne: params.seuilMoyenne,
+          topN: params.topN,
+          eleves: data.eleves.map(e => ({
+            nom: e.nom,
+            prenom: e.prenom,
+            moyenne: e.moyenne,
+            rang: e.rang,
+            mention: e.moyenne >= 16 ? 'felicitations' : e.moyenne >= 14 ? 'encouragement' : 'tableau_honneur',
+          })),
+          orientation: params.orientation || 'portrait',
+        };
+
+        const result = await generateTableauHonneurPDF(pdfParams);
+        if (result) {
+          Alert.alert('Succès', 'Tableau d\'honneur PDF généré avec succès');
+          return true;
+        } else {
+          Alert.alert('Erreur', 'La génération du PDF a échoué');
+          return false;
+        }
+      } catch (err) {
+        console.error('Error generating tableau honneur PDF:', err);
+        Alert.alert('Erreur', 'Impossible de générer le tableau d\'honneur PDF');
+        return false;
+      }
+    }
+  }, [isSubscribed, exportToExcel, generateTableauHonneurPDF]);
+
+  // ============================================================
+  // GÉNÉRATION EXPORT PAR CLASSE (PDF) – AVEC COLONNES
+  // ============================================================
+
+  const generateExportClassePDF = useCallback(async (params: GenerateClassePDFParams): Promise<boolean> => {
+    console.log('🔍 generateExportClassePDF - DEBUT - params:', JSON.stringify(params, null, 2));
+    
+    if (!isSubscribed) {
+      console.log('🔍 generateExportClassePDF - PAS ABONNE');
+      Alert.alert('Abonnement requis', 'La génération de PDF nécessite un abonnement actif.');
+      return false;
+    }
+  
+    try {
+      const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : 
+                         params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+      
+      console.log('🔍 generateExportClassePDF - periodeKey:', periodeKey);
+      console.log('🔍 generateExportClassePDF - appel à getClasseExportData avec:', {
+        etablissementId: params.etablissementId,
+        anneeScolaireId: params.anneeScolaireId,
+        classeId: params.classeId,
+        periode: periodeKey,
+      });
+      
+      const data = await getClasseExportData(
+        params.etablissementId,
+        params.anneeScolaireId,
+        params.classeId,
+        periodeKey
+      );
+      
+      console.log('🔍 generateExportClassePDF - data reçue:', data ? `OK (${data.eleves?.length} élèves)` : 'NULL');
+  
+      if (!data || data.eleves.length === 0) {
+        console.log('🔍 generateExportClassePDF - AUCUNE DONNEE');
+        Alert.alert('Information', 'Aucune donnée à exporter pour cette classe.');
+        return false;
+      }
+  
+      const columnsToUse = params.columns || DEFAULT_CLASSE_COLUMNS;
+      
+      const pdfParams: GenerateClassePDFParams = {
+        etablissementNom: params.etablissementNom,
+        anneeScolaireLibelle: params.anneeScolaireLibelle,
+        periodeLabel: params.periodeLabel,
+        classeNom: params.classeNom,
+        effectif: data.effectif,
+        moyenneClasse: data.moyenneClasse,
+        eleves: data.eleves.map(e => ({
+          rang: e.rang,
+          matricule: e.matricule,
+          nom: e.nom,
+          prenom: e.prenom,
+          moyenne: e.moyenneGenerale,
+          appreciation: e.appreciation,
+          detailsParMatiere: e.detailsParMatiere,
+        })),
+        orientation: params.orientation || 'portrait',
+        columns: columnsToUse,
+      };
+  
+      console.log('🔍 generateExportClassePDF - colonnes utilisées:', columnsToUse);
+      console.log('🔍 generateExportClassePDF - appel à generateClassePDF');
+      const result = await generateClassePDF(pdfParams);
+      console.log('🔍 generateExportClassePDF - résultat generateClassePDF:', result);
+      
+      if (result) {
+        Alert.alert('Succès', 'Relevé de classe PDF généré avec succès');
+        return true;
+      } else {
+        Alert.alert('Erreur', 'La génération du PDF a échoué');
+        return false;
+      }
+    } catch (err) {
+      console.error('Error generating classe PDF:', err);
+      Alert.alert('Erreur', 'Impossible de générer le PDF');
+      return false;
+    }
+  }, [isSubscribed, generateClassePDF]);
+
+  // ============================================================
+  // GÉNÉRATION EXPORT PAR MATIÈRE (PDF) – AVEC COLONNES
+  // ============================================================
+
+  const generateExportMatierePDF = useCallback(async (params: GenerateMatierePDFParams): Promise<boolean> => {
+    console.log('🔍 generateExportMatierePDF - DEBUT - params:', JSON.stringify(params, null, 2));
+    
+    if (!isSubscribed) {
+      console.log('🔍 generateExportMatierePDF - PAS ABONNE');
+      Alert.alert('Abonnement requis', 'La génération de PDF nécessite un abonnement actif.');
+      return false;
+    }
+
+    try {
+      const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : 
+                         params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+      
+      console.log('🔍 generateExportMatierePDF - periodeKey:', periodeKey);
+      
+      const data = await getMatiereExportData(
+        params.etablissementId,
+        params.anneeScolaireId,
+        params.classeId,
+        params.matiereId,
+        periodeKey
+      );
+      
+      console.log('🔍 generateExportMatierePDF - data reçue:', data ? `OK (${data.eleves?.length} élèves)` : 'NULL');
+
+      if (!data || data.eleves.length === 0) {
+        console.log('🔍 generateExportMatierePDF - AUCUNE DONNEE');
+        Alert.alert('Information', 'Aucune donnée à exporter pour cette matière.');
+        return false;
+      }
+
+      const columnsToUse = params.columns || DEFAULT_MATIERE_COLUMNS;
+
+      const pdfParams: GenerateMatierePDFParams = {
+        etablissementNom: params.etablissementNom,
+        anneeScolaireLibelle: params.anneeScolaireLibelle,
+        periodeLabel: params.periodeLabel,
+        classeNom: params.classeNom,
+        matiereNom: params.matiereNom,
+        coefficient: data.coefficient,
+        effectif: data.effectif,
+        moyenneClasse: data.moyenneClasse,
+        ecartType: data.ecartType,
+        tauxReussite: data.tauxReussite,
+        eleves: data.eleves.map(e => ({
+          rang: e.rang,
+          matricule: e.matricule,
+          nom: e.nom,
+          prenom: e.prenom,
+          note: e.note,
+          appreciation: e.appreciation,
+        })),
+        orientation: params.orientation || 'portrait',
+        columns: columnsToUse,
+      };
+
+      console.log('🔍 generateExportMatierePDF - colonnes utilisées:', columnsToUse);
+      console.log('🔍 generateExportMatierePDF - appel à generateMatierePDF');
+      const result = await generateMatierePDF(pdfParams);
+      console.log('🔍 generateExportMatierePDF - résultat generateMatierePDF:', result);
+      
+      if (result) {
+        Alert.alert('Succès', 'Analyse de matière PDF générée avec succès');
+        return true;
+      } else {
+        Alert.alert('Erreur', 'La génération du PDF a échoué');
+        return false;
+      }
+    } catch (err) {
+      console.error('Error generating matiere PDF:', err);
+      Alert.alert('Erreur', 'Impossible de générer le PDF');
+      return false;
+    }
+  }, [isSubscribed, generateMatierePDF]);
+
+// ============================================================
+// GÉNÉRATION BULLETIN AVEC VÉRIFICATION D'ÉLIGIBILITÉ
+// PHASE C.3 : Utilise periodeId (UUID) au lieu de Periode
+// ============================================================
+
+const generateBulletin = useCallback(async (params: BulletinParams): Promise<boolean> => {
+  if (!isSubscribed) {
+    Alert.alert('Abonnement requis', 'La génération de bulletin nécessite un abonnement actif.');
+    return false;
+  }
+
+  try {
+    console.log('🔍 generateBulletin - DEBUT - params:', params);
+    
+    // Vérifier l'éligibilité de l'élève
+    const { data: eligibiliteData, error: eligibiliteError } = await supabase
+      .rpc('is_eleve_eligible_bulletin', {
+        p_eleve_id: params.eleveId,
+        p_annee_scolaire_id: params.anneeScolaireId,
+      });
+
+    if (eligibiliteError) {
+      console.error('Erreur vérification éligibilité:', eligibiliteError);
+    }
+
+    const isEligible = eligibiliteData?.eligible ?? true;
+    const motifs = eligibiliteData?.motifs ?? [];
+
+    if (!isEligible) {
+      const motifsText = motifs.map((m: string) => `• ${m}`).join('\n');
+      Alert.alert(
+        'Génération impossible',
+        `Cet élève n'est pas éligible à la génération du bulletin.\n\nMotif(s) :\n${motifsText}\n\nVeuillez régulariser sa situation avant de générer le bulletin.`,
+        [{ text: 'OK' }]
+      );
+      return false;
+    }
+    
+    // Récupérer les données du bulletin avec periodeId
+    const data = await getBulletinExportData(
+      params.eleveId,
+      params.anneeScolaireId,
+      params.periodeId  // ← MODIFIÉ : utilise periodeId (UUID)
+    );
+    
+    console.log('🔍 generateBulletin - data reçue:', data ? 'OK' : 'NULL');
+    
+    if (!data) {
+      Alert.alert('Erreur', 'Impossible de récupérer les données de l\'élève.');
+      return false;
+    }
+    
+    // Récupérer le nom de l'établissement
+    const { data: etablissement } = await supabase
+      .from('etablissements')
+      .select('nom')
+      .eq('id', params.etablissementId)
+      .single();
+    
+    // Récupérer le libellé de la période depuis la base
+    const { data: periodeData } = await supabase
+      .from('periodes')
+      .select('libelle')
+      .eq('id', params.periodeId)
+      .single();
+    
+    const periodeLabel = periodeData?.libelle || params.periodeLabel || 'Période';
+    
+    const pdfParams: GenerateBulletinParams = {
+      eleveId: data.eleve.id,
+      eleveNom: data.eleve.nom,
+      elevePrenom: data.eleve.prenom,
+      matriculeEtablissement: data.eleve.matricule,
+      matriculeSNET: data.eleve.matricule,
+      dateNaissance: data.eleve.dateNaissance,
+      lieuNaissance: data.eleve.lieuNaissance,
+      sexe: data.eleve.sexe,
+      classeNom: data.classe.nom,
+      anneeScolaireLibelle: params.anneeScolaireId,
+      periodeLabel,
+      notes: data.notes,
+      moyenneGenerale: data.moyenneGenerale,
+      rang: data.rang,
+      plusForteMoyenne: data.plusForteMoyenne,
+      plusFaibleMoyenne: data.plusFaibleMoyenne,
+      decisions: data.decisions,
+      appreciationChef: data.appreciationChef,
+      appreciationPP: data.appreciationPP,
+      qrCodeUrl: `https://schoolnet.bj/verify/${data.eleve.id}/${params.periodeId}`,
+      orientation: params.orientation || 'portrait',
+    };
+    
+    const result = await generateBulletinPDF(pdfParams);
+    
+    if (result) {
+      Alert.alert('Succès', 'Bulletin PDF généré avec succès');
+      return true;
+    } else {
+      Alert.alert('Erreur', 'La génération du PDF a échoué');
+      return false;
+    }
+  } catch (err) {
+    console.error('Error generating bulletin:', err);
+    Alert.alert('Erreur', 'Impossible de générer le bulletin');
+    return false;
+  }
+}, [isSubscribed, generateBulletinPDF]);
+
+// ============================================================
+// GÉNÉRATION BULLETINS EN SÉRIE – AVEC PROGRESSION ET ZIP
+// PHASE C.3 : Utilise periodeId (UUID) au lieu de 'T1' en dur
+// ============================================================
+
+const generateBulletinsBatch = useCallback(async (
+  eleveIds: string[],
+  periodeId: string,  // ← NOUVEAU PARAMÈTRE
+  onProgress?: (current: number, total: number, eleveNom?: string) => void
+): Promise<boolean> => {
+  if (!isSubscribed) {
+    Alert.alert('Abonnement requis', 'La génération de bulletins nécessite un abonnement actif.');
+    return false;
+  }
+
+  if (eleveIds.length === 0) {
+    Alert.alert('Information', 'Aucun élève sélectionné.');
+    return false;
+  }
+
+  let successCount = 0;
+  let failCount = 0;
+  const generatedFiles: { uri: string; name: string }[] = [];
+
+  if (onProgress) {
+    onProgress(0, eleveIds.length, 'Préparation...');
+  }
+
+  for (let i = 0; i < eleveIds.length; i++) {
+    const eleveId = eleveIds[i];
+    
+    try {
+      if (onProgress) {
+        onProgress(i + 1, eleveIds.length, `Vérification éligibilité...`);
+      }
+
+      const { data: eligibiliteData } = await supabase
+        .rpc('is_eleve_eligible_bulletin', {
+          p_eleve_id: eleveId,
+          p_annee_scolaire_id: anneeScolaireId,
+        });
+
+      const isEligible = eligibiliteData?.eligible ?? true;
+
+      if (!isEligible) {
+        console.log(`Élève ${eleveId} non éligible, ignoré`);
+        failCount++;
+        if (onProgress) {
+          onProgress(i + 1, eleveIds.length, `Élève non éligible (ignoré)`);
+        }
+        continue;
+      }
+
+      if (onProgress) {
+        onProgress(i + 1, eleveIds.length, `Récupération des données...`);
+      }
+
+      const data = await getBulletinExportData(eleveId, anneeScolaireId, periodeId);
+      
+      if (!data) {
+        console.error(`Impossible de récupérer les données pour l'élève ${eleveId}`);
+        failCount++;
+        if (onProgress) {
+          onProgress(i + 1, eleveIds.length, `Données non trouvées (ignoré)`);
+        }
+        continue;
+      }
+
+      if (onProgress) {
+        onProgress(i + 1, eleveIds.length, `Génération du bulletin de ${data.eleve.prenom} ${data.eleve.nom}...`);
+      }
+
+      const { data: periodeData } = await supabase
+        .from('periodes')
+        .select('libelle')
+        .eq('id', periodeId)
+        .single();
+      
+      const periodeLabel = periodeData?.libelle || 'Période';
+
+      const pdfParams: GenerateBulletinParams = {
+        eleveId: data.eleve.id,
+        eleveNom: data.eleve.nom,
+        elevePrenom: data.eleve.prenom,
+        matriculeEtablissement: data.eleve.matricule,
+        matriculeSNET: data.eleve.matricule,
+        dateNaissance: data.eleve.dateNaissance,
+        lieuNaissance: data.eleve.lieuNaissance,
+        sexe: data.eleve.sexe,
+        classeNom: data.classe.nom,
+        anneeScolaireLibelle: anneeScolaireId,
+        periodeLabel,
+        notes: data.notes,
+        moyenneGenerale: data.moyenneGenerale,
+        rang: data.rang,
+        plusForteMoyenne: data.plusForteMoyenne,
+        plusFaibleMoyenne: data.plusFaibleMoyenne,
+        decisions: data.decisions,
+        appreciationChef: data.appreciationChef,
+        appreciationPP: data.appreciationPP,
+        qrCodeUrl: `https://schoolnet.bj/verify/${data.eleve.id}/${periodeId}`,
+        orientation: 'portrait',
+      };
+
+      const result = await generateBulletinPDF(pdfParams);
+      
+      if (result) {
+        successCount++;
+        if (typeof result === 'string') {
+          generatedFiles.push({
+            uri: result,
+            name: `bulletin_${data.eleve.nom}_${data.eleve.prenom}_${periodeLabel}.pdf`,
+          });
+        }
+        console.log(`✅ Bulletin généré: ${data.eleve.prenom} ${data.eleve.nom}`);
+      } else {
+        console.error(`❌ Échec génération bulletin pour ${data.eleve.prenom} ${data.eleve.nom}`);
+        failCount++;
+      }
+
+      if (onProgress) {
+        onProgress(i + 1, eleveIds.length, `${data.eleve.prenom} ${data.eleve.nom} - ${successCount} succès, ${failCount} échecs`);
+      }
+
+    } catch (err) {
+      console.error(`Erreur génération bulletin pour ${eleveId}:`, err);
+      failCount++;
+      if (onProgress) {
+        onProgress(i + 1, eleveIds.length, `Erreur (ignorée)`);
+      }
+    }
+  }
+
+  if (successCount > 1 && generatedFiles.length > 0) {
+    if (onProgress) {
+      onProgress(eleveIds.length, eleveIds.length, `Création du fichier ZIP...`);
+    }
+
+    try {
+      const { createZipFromFiles, shareZip } = await import('@/services/zipService');
+      const zipResult = await createZipFromFiles(
+        generatedFiles,
+        `bulletins_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.zip`
+      );
+      
+      if (zipResult) {
+        await shareZip(zipResult.uri, zipResult.name);
+        console.log(`📦 ZIP créé avec ${zipResult.fileCount} bulletins`);
+      } else {
+        Alert.alert(
+          'Bulletins générés',
+          `${successCount} bulletin(s) généré(s) avec succès.\n\nLes fichiers ont été sauvegardés individuellement.`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (zipError) {
+      console.error('Erreur création ZIP:', zipError);
+      Alert.alert(
+        'Bulletins générés',
+        `${successCount} bulletin(s) généré(s) avec succès.\n\nLa création du fichier ZIP a échoué, mais les fichiers sont disponibles individuellement.`,
+        [{ text: 'OK' }]
+      );
+    }
+  } else if (successCount === 1 && generatedFiles.length === 1) {
+    Alert.alert('Succès', `1 bulletin généré avec succès.`);
+  }
+
+  if (successCount > 0) {
+    return true;
+  } else {
+    Alert.alert('Erreur', 'Aucun bulletin n\'a pu être généré.\n\nVérifiez que les élèves sont éligibles (frais, inscriptions) et que des notes existent.');
+    return false;
+  }
+}, [isSubscribed, anneeScolaireId, generateBulletinPDF]);
+
+  // ============================================================
+  // PRÉVISUALISATION PDF (sans partage automatique)
+  // ============================================================
+
+  const generateExportClassePDFPreview = useCallback(async (params: GenerateClassePDFParams): Promise<string | null> => {
+    if (!isSubscribed) {
+      Alert.alert('Abonnement requis', 'La prévisualisation nécessite un abonnement actif.');
+      return null;
+    }
+
+    try {
+      const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : 
+                         params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+      
+      const data = await getClasseExportData(
+        params.etablissementId,
+        params.anneeScolaireId,
+        params.classeId,
+        periodeKey
+      );
+
+      if (!data || data.eleves.length === 0) {
+        Alert.alert('Information', 'Aucune donnée à exporter pour cette classe.');
+        return null;
+      }
+
+      const columnsToUse = params.columns || DEFAULT_CLASSE_COLUMNS;
+
+      const pdfParams: GenerateClassePDFParams = {
+        etablissementNom: params.etablissementNom,
+        anneeScolaireLibelle: params.anneeScolaireLibelle,
+        periodeLabel: params.periodeLabel,
+        classeNom: params.classeNom,
+        effectif: data.effectif,
+        moyenneClasse: data.moyenneClasse,
+        eleves: data.eleves.map(e => ({
+          rang: e.rang,
+          matricule: e.matricule,
+          nom: e.nom,
+          prenom: e.prenom,
+          moyenne: e.moyenneGenerale,
+          appreciation: e.appreciation,
+          detailsParMatiere: e.detailsParMatiere,
+        })),
+        orientation: params.orientation || 'portrait',
+        columns: columnsToUse,
+      };
+
+      // Appeler directement le générateur sans sauvegarde automatique
+      // Note: generateClassePDF retourne déjà l'URI sans partage automatique
+      return await generateClassePDF(pdfParams);
+    } catch (err) {
+      console.error('Error generating classe PDF preview:', err);
+      return null;
+    }
+  }, [isSubscribed, generateClassePDF]);
+
+  const generateExportMatierePDFPreview = useCallback(async (params: GenerateMatierePDFParams): Promise<string | null> => {
+    if (!isSubscribed) {
+      Alert.alert('Abonnement requis', 'La prévisualisation nécessite un abonnement actif.');
+      return null;
+    }
+
+    try {
+      const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : 
+                         params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+      
+      const data = await getMatiereExportData(
+        params.etablissementId,
+        params.anneeScolaireId,
+        params.classeId,
+        params.matiereId,
+        periodeKey
+      );
+
+      if (!data || data.eleves.length === 0) {
+        Alert.alert('Information', 'Aucune donnée à exporter pour cette matière.');
+        return null;
+      }
+
+      const columnsToUse = params.columns || DEFAULT_MATIERE_COLUMNS;
+
+      const pdfParams: GenerateMatierePDFParams = {
+        etablissementNom: params.etablissementNom,
+        anneeScolaireLibelle: params.anneeScolaireLibelle,
+        periodeLabel: params.periodeLabel,
+        classeNom: params.classeNom,
+        matiereNom: params.matiereNom,
+        coefficient: data.coefficient,
+        effectif: data.effectif,
+        moyenneClasse: data.moyenneClasse,
+        ecartType: data.ecartType,
+        tauxReussite: data.tauxReussite,
+        eleves: data.eleves.map(e => ({
+          rang: e.rang,
+          matricule: e.matricule,
+          nom: e.nom,
+          prenom: e.prenom,
+          note: e.note,
+          appreciation: e.appreciation,
+        })),
+        orientation: params.orientation || 'portrait',
+        columns: columnsToUse,
+      };
+
+      return await generateMatierePDF(pdfParams);
+    } catch (err) {
+      console.error('Error generating matiere PDF preview:', err);
+      return null;
+    }
+  }, [isSubscribed, generateMatierePDF]);
+
+  const generateRapportPreview = useCallback(async (params: GenerateRapportParams): Promise<string | null> => {
+    if (!isSubscribed) {
+      Alert.alert('Abonnement requis', 'La prévisualisation nécessite un abonnement actif.');
+      return null;
+    }
+
+    try {
+      const periodeKey = params.periodeLabel === 'Semestre 1' ? 'S1' : 
+                         params.periodeLabel === 'Semestre 2' ? 'S2' : 'T1';
+      
+      const data = await getPeriodeExportData(
+        params.etablissementId,
+        params.etablissementNom,
+        params.anneeScolaireId,
+        periodeKey
+      );
+
+      if (!data) {
+        Alert.alert('Erreur', 'Impossible de récupérer les données pour le rapport.');
+        return null;
+      }
+
+      const pdfParams: GenerateRapportParams = {
+        etablissementNom: params.etablissementNom,
+        anneeScolaireLibelle: params.anneeScolaireLibelle,
+        periodeLabel: params.periodeLabel,
+        statsGenerales: {
+          moyenneEtablissement: data.statsGlobales.moyenneGenerale,
+          tauxReussite: data.statsGlobales.tauxReussite,
+          meilleureClasse: data.statsGlobales.meilleureClasse,
+          plusFaibleClasse: data.statsGlobales.plusFaibleClasse,
+        },
+        classesStats: data.classesStats,
+        matieresStats: data.matieresStats,
+        inclureTableauHonneur: params.inclureTableauHonneur,
+        tableauHonneur: params.inclureTableauHonneur ? data.tableauHonneur?.map(e => ({
+          nom: e.nom,
+          prenom: e.prenom,
+          moyenne: e.moyenne,
+          rang: e.rang,
+        })) : [],
+        orientation: params.orientation || 'landscape',
+      };
+
+      return await generateRapportPDF(pdfParams);
+    } catch (err) {
+      console.error('Error generating rapport preview:', err);
+      return null;
+    }
+  }, [isSubscribed, generateRapportPDF]);
+
+  return {
+    isExporting: isExporting || pdfGenerating,
+    error: error || pdfError,
+    exportToExcel,
+    generateRapport,
+    generateTableauHonneur,
+    generateBulletin,
+    generateBulletinsBatch,
+    generateExportClassePDF,
+    generateExportMatierePDF,
+    generateExportClassePDFPreview,
+    generateExportMatierePDFPreview,
+    generateRapportPreview,
+    isSubscribed,
+    subscriptionLoading,
+    getPreviewData,
+  };
+}

@@ -1,0 +1,787 @@
+// /home/project/components/classes/ClasseForm.tsx
+// Formulaire de création de classe – Version corrigée
+
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Modal, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { ChevronDown, Check, X, BookOpen, AlertCircle, Calendar } from 'lucide-react-native';
+import { Card } from '@/components/Card';
+import { supabase } from '@/lib/supabase';
+import { useAcademicStructure } from '@/hooks/useAcademicStructure';
+import theme from '@/constants/theme';
+
+interface ClasseFormProps {
+  etablissementId: string;
+  onSuccess: () => void;
+  onCancel: () => void;
+  initialData?: any;
+}
+
+// Options spéciales "Aucun"
+const AUCUN_INDICE = { id: 'aucun', valeur: 'Aucun indice', type_indice: 'NONE', ordre: 0 };
+const AUCUN_MODELE = { id: 'aucun', nom: 'Aucun groupe', valeurs: [], type_suffixe: 'NONE' };
+
+export default function ClasseForm({ etablissementId, onSuccess, onCancel, initialData }: ClasseFormProps) {
+  // ✅ Passer etablissementId au hook
+  const {
+    cycles,
+    niveaux,
+    series,
+    options,
+    indices,
+    modelesGroupes,
+    anneeScolaireActive,
+    loading: structureLoading,
+    getNiveauxByCycle,
+    getOptionsBySerie,
+  } = useAcademicStructure(etablissementId);
+
+  const [selectedCycleId, setSelectedCycleId] = useState<string>(initialData?.cycle_id || '');
+  const [selectedNiveauId, setSelectedNiveauId] = useState<string>(initialData?.niveau_id || '');
+  const [selectedSerieId, setSelectedSerieId] = useState<string>(initialData?.serie_id || '');
+  const [selectedOptionId, setSelectedOptionId] = useState<string>(initialData?.option_serie_id || '');
+  const [selectedIndiceId, setSelectedIndiceId] = useState<string>(initialData?.indice_id || 'aucun');
+  const [selectedModeleGroupeId, setSelectedModeleGroupeId] = useState<string>(initialData?.modele_groupe_id || 'aucun');
+  const [capacite, setCapacite] = useState<string>(initialData?.capacite?.toString() || '');
+  const [isManuel, setIsManuel] = useState<boolean>(initialData?.is_manuel || false);
+  const [nomManuel, setNomManuel] = useState<string>(initialData?.nom_manuel || '');
+  const [submitting, setSubmitting] = useState(false);
+
+  // États pour les modals
+  const [showCycleModal, setShowCycleModal] = useState(false);
+  const [showNiveauModal, setShowNiveauModal] = useState(false);
+  const [showSerieModal, setShowSerieModal] = useState(false);
+  const [showOptionModal, setShowOptionModal] = useState(false);
+  const [showIndiceModal, setShowIndiceModal] = useState(false);
+  const [showModeleModal, setShowModeleModal] = useState(false);
+
+  // Données filtrées
+  const niveauxFiltres = selectedCycleId ? getNiveauxByCycle(selectedCycleId) : [];
+  const optionsFiltrees = selectedSerieId ? getOptionsBySerie(selectedSerieId) : [];
+  
+  // Liste des indices avec option "Aucun"
+  const indicesWithNone = [AUCUN_INDICE, ...indices];
+  
+  // Liste des modèles avec option "Aucun"
+  const modelesWithNone = [AUCUN_MODELE, ...modelesGroupes];
+
+  // ✅ Vérifier si une année scolaire est active (avec chargement réussi)
+  useEffect(() => {
+    if (!structureLoading && !anneeScolaireActive) {
+      console.log('[ClasseForm] Aucune année scolaire active trouvée');
+      Alert.alert(
+        'Année scolaire non définie',
+        'Aucune année scolaire active n\'est définie pour cet établissement. Veuillez contacter l\'administrateur.',
+        [{ text: 'OK', onPress: onCancel }]
+      );
+    }
+  }, [anneeScolaireActive, structureLoading]);
+
+  // Génération du nom aperçu
+  const getApercuNom = (): string => {
+    if (isManuel) return nomManuel;
+    
+    const niveau = niveaux.find(n => n.id === selectedNiveauId);
+    const serie = series.find(s => s.id === selectedSerieId);
+    const option = options.find(o => o.id === selectedOptionId);
+    const indice = indices.find(i => i.id === selectedIndiceId);
+    
+    let name = niveau?.nom || '';
+    if (serie) name += ` ${serie.nom}`;
+    if (option) name += ` ${option.code}`;
+    if (indice && selectedIndiceId !== 'aucun') name += `/${indice.valeur}`;
+    
+    return name;
+  };
+
+  const apercuNom = getApercuNom();
+
+  const handleSubmit = async () => {
+    if (!anneeScolaireActive) {
+      Alert.alert('Erreur', 'Aucune année scolaire active. Impossible de créer une classe.');
+      return;
+    }
+
+    if (isManuel && !nomManuel.trim()) {
+      Alert.alert('Erreur', 'Veuillez saisir un nom pour la classe');
+      return;
+    }
+
+    if (!isManuel && !selectedNiveauId) {
+      Alert.alert('Erreur', 'Veuillez sélectionner un niveau');
+      return;
+    }
+
+    setSubmitting(true);
+    
+    try {
+      const niveau = niveaux.find(n => n.id === selectedNiveauId);
+      const serie = series.find(s => s.id === selectedSerieId);
+      const option = options.find(o => o.id === selectedOptionId);
+      const indice = indices.find(i => i.id === selectedIndiceId);
+      
+      let nomComplet = '';
+      let niveauText = '';
+      
+      if (isManuel) {
+        nomComplet = nomManuel;
+        niveauText = '';
+      } else {
+        niveauText = niveau?.nom || '';
+        nomComplet = niveauText;
+        if (serie) nomComplet += ` ${serie.nom}`;
+        if (option) nomComplet += ` ${option.code}`;
+        if (indice && selectedIndiceId !== 'aucun') nomComplet += `/${indice.valeur}`;
+      }
+
+      const classeData = {
+        etablissement_id: etablissementId,
+        annee_scolaire_id: anneeScolaireActive.id,
+        nom: nomComplet,
+        niveau: niveauText,
+        capacite: capacite ? parseInt(capacite) : null,
+        is_active: true,
+        cycle_id: selectedCycleId || null,
+        niveau_id: selectedNiveauId || null,
+        serie_id: (selectedSerieId && selectedSerieId !== 'aucun') ? selectedSerieId : null,
+        option_serie_id: (selectedOptionId && selectedOptionId !== 'aucun') ? selectedOptionId : null,
+        indice_id: (selectedIndiceId && selectedIndiceId !== 'aucun') ? selectedIndiceId : null,
+        modele_groupe_id: (selectedModeleGroupeId && selectedModeleGroupeId !== 'aucun') ? selectedModeleGroupeId : null,
+        nom_generique: !isManuel ? nomComplet : null,
+        is_manuel: isManuel
+      };
+
+      console.log('[ClasseForm] Envoi des données:', JSON.stringify(classeData, null, 2));
+
+      const { data: result, error } = await supabase
+        .from('classes')
+        .insert(classeData)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[ClasseForm] Erreur Supabase:', error);
+        throw new Error(error.message);
+      }
+
+      console.log('[ClasseForm] Classe créée avec succès:', result);
+
+      // Si un modèle de groupe est sélectionné, créer les groupes
+      if (selectedModeleGroupeId !== 'aucun' && selectedModeleGroupeId && !isManuel) {
+        const modele = modelesGroupes.find(m => m.id === selectedModeleGroupeId);
+        if (modele && modele.valeurs && modele.valeurs.length > 0) {
+          const groupesData = modele.valeurs.map((valeur: string, index: number) => ({
+            classe_id: result.id,
+            nom: valeur,
+            modele_groupe_id: selectedModeleGroupeId,
+            ordre: index + 1
+          }));
+          
+          const { error: groupesError } = await supabase
+            .from('groupes_eleves')
+            .insert(groupesData);
+          
+          if (groupesError) {
+            console.error('[ClasseForm] Erreur création groupes:', groupesError);
+          } else {
+            console.log('[ClasseForm] Groupes créés avec succès');
+          }
+        }
+      }
+
+      Alert.alert('Succès', `La classe "${nomComplet}" a été créée avec succès`);
+      onSuccess();
+      
+    } catch (error: any) {
+      console.error('[ClasseForm] Erreur:', error);
+      Alert.alert('Erreur', error.message || 'Impossible de créer la classe');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const isLoading = structureLoading || submitting;
+
+  // Affichage si pas d'année scolaire active
+  if (!anneeScolaireActive && !structureLoading) {
+    return (
+      <View style={styles.centerContainer}>
+        <Calendar size={48} color={theme.colors.warning.DEFAULT} />
+        <Text style={styles.emptyTitle}>Année scolaire non définie</Text>
+        <Text style={styles.emptyText}>
+          Aucune année scolaire active n'est configurée pour cet établissement.
+        </Text>
+        <TouchableOpacity style={styles.backButton} onPress={onCancel}>
+          <Text style={styles.backButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Composant sélecteur générique
+  const Selector = ({ 
+    label, 
+    value, 
+    onPress, 
+    placeholder,
+    required = false
+  }: { 
+    label: string; 
+    value: string; 
+    onPress: () => void; 
+    placeholder: string;
+    required?: boolean;
+  }) => (
+    <View style={styles.selectorContainer}>
+      <Text style={styles.selectorLabel}>
+        {label} {required && <Text style={styles.required}>*</Text>}
+      </Text>
+      <TouchableOpacity style={styles.selector} onPress={onPress}>
+        <Text style={[styles.selectorText, !value && styles.selectorPlaceholder]}>
+          {value || placeholder}
+        </Text>
+        <ChevronDown size={18} color="#6B7280" />
+      </TouchableOpacity>
+    </View>
+  );
+
+  // Modal générique
+  const SelectorModal = ({ 
+    visible, 
+    onClose, 
+    title, 
+    items, 
+    selectedId, 
+    onSelect,
+    getItemLabel,
+    getItemSubLabel
+  }: { 
+    visible: boolean; 
+    onClose: () => void; 
+    title: string; 
+    items: any[]; 
+    selectedId: string; 
+    onSelect: (id: string) => void;
+    getItemLabel: (item: any) => string;
+    getItemSubLabel?: (item: any) => string;
+  }) => (
+    <Modal visible={visible} transparent={true} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{title}</Text>
+            <TouchableOpacity onPress={onClose}>
+              <X size={20} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.modalList}>
+            {items.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                style={[styles.modalItem, selectedId === item.id && styles.modalItemActive]}
+                onPress={() => {
+                  onSelect(item.id);
+                  onClose();
+                }}
+              >
+                <View style={styles.modalItemContent}>
+                  <Text style={[styles.modalItemText, selectedId === item.id && styles.modalItemTextActive]}>
+                    {getItemLabel(item)}
+                  </Text>
+                  {getItemSubLabel && (
+                    <Text style={styles.modalItemSubText}>{getItemSubLabel(item)}</Text>
+                  )}
+                </View>
+                {selectedId === item.id && <Check size={16} color={theme.colors.primary.DEFAULT} />}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  if (isLoading && !cycles.length) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement des options...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/* Année scolaire active */}
+      {anneeScolaireActive && (
+        <View style={styles.anneeBanner}>
+          <Calendar size={14} color={theme.colors.success.DEFAULT} />
+          <Text style={styles.anneeText}>
+            Année scolaire active : {anneeScolaireActive?.libelle}
+          </Text>
+        </View>
+      )}
+
+      <Card style={styles.card}>
+        <Text style={styles.cardTitle}>Création d'une classe</Text>
+        
+        {/* Mode de création */}
+        <View style={styles.modeSwitch}>
+          <TouchableOpacity
+            style={[styles.modeButton, !isManuel && styles.modeButtonActive]}
+            onPress={() => setIsManuel(false)}
+          >
+            <BookOpen size={16} color={!isManuel ? '#FFFFFF' : '#6B7280'} />
+            <Text style={[styles.modeButtonText, !isManuel && styles.modeButtonTextActive]}>
+              Mode structuré
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modeButton, isManuel && styles.modeButtonActive]}
+            onPress={() => setIsManuel(true)}
+          >
+            <AlertCircle size={16} color={isManuel ? '#FFFFFF' : '#6B7280'} />
+            <Text style={[styles.modeButtonText, isManuel && styles.modeButtonTextActive]}>
+              Mode manuel
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {!isManuel ? (
+          // Mode structuré
+          <>
+            <Selector
+              label="Cycle"
+              value={cycles.find(c => c.id === selectedCycleId)?.nom || ''}
+              onPress={() => setShowCycleModal(true)}
+              placeholder="Sélectionner un cycle"
+              required
+            />
+
+            {selectedCycleId && (
+              <Selector
+                label="Niveau"
+                value={niveaux.find(n => n.id === selectedNiveauId)?.nom || ''}
+                onPress={() => setShowNiveauModal(true)}
+                placeholder="Sélectionner un niveau"
+                required
+              />
+            )}
+
+            {selectedCycleId && cycles.find(c => c.id === selectedCycleId)?.nom === '2nd Cycle' && (
+              <>
+                <Selector
+                  label="Série"
+                  value={series.find(s => s.id === selectedSerieId)?.nom || ''}
+                  onPress={() => setShowSerieModal(true)}
+                  placeholder="Sélectionner une série"
+                />
+
+                {selectedSerieId && (
+                  <Selector
+                    label="Option"
+                    value={options.find(o => o.id === selectedOptionId)?.code || ''}
+                    onPress={() => setShowOptionModal(true)}
+                    placeholder="Sélectionner une option"
+                  />
+                )}
+              </>
+            )}
+
+            <Selector
+              label="Indice"
+              value={indicesWithNone.find(i => i.id === selectedIndiceId)?.valeur || ''}
+              onPress={() => setShowIndiceModal(true)}
+              placeholder="Aucun indice"
+            />
+
+            <Selector
+              label="Modèle de groupes"
+              value={modelesWithNone.find(m => m.id === selectedModeleGroupeId)?.nom || ''}
+              onPress={() => setShowModeleModal(true)}
+              placeholder="Aucun groupe"
+            />
+
+            {apercuNom && (
+              <View style={styles.previewContainer}>
+                <Text style={styles.previewLabel}>Aperçu du nom :</Text>
+                <Text style={styles.previewName}>{apercuNom}</Text>
+              </View>
+            )}
+          </>
+        ) : (
+          // Mode manuel
+          <>
+            <Text style={styles.inputLabel}>Nom de la classe *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ex: 6ème M1, Classe spéciale"
+              value={nomManuel}
+              onChangeText={setNomManuel}
+            />
+            <Text style={styles.inputHint}>
+              Utilisez ce mode pour les cas particuliers non prévus dans les listes.
+            </Text>
+          </>
+        )}
+
+        {/* Capacité */}
+        <Text style={styles.inputLabel}>Capacité (optionnel)</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Nombre d'élèves"
+          value={capacite}
+          onChangeText={setCapacite}
+          keyboardType="numeric"
+        />
+
+        {/* Actions */}
+        <View style={styles.actions}>
+          <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
+            <Text style={styles.cancelButtonText}>Annuler</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.submitButton, (!isManuel && !selectedNiveauId) && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={(!isManuel && !selectedNiveauId) || submitting}
+          >
+            {submitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.submitButtonText}>Créer la classe</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Card>
+
+      {/* Modals */}
+      <SelectorModal
+        visible={showCycleModal}
+        onClose={() => setShowCycleModal(false)}
+        title="Sélectionner un cycle"
+        items={cycles}
+        selectedId={selectedCycleId}
+        onSelect={(id) => {
+          setSelectedCycleId(id);
+          setSelectedNiveauId('');
+          setSelectedSerieId('');
+          setSelectedOptionId('');
+        }}
+        getItemLabel={(item) => item.nom}
+      />
+
+      <SelectorModal
+        visible={showNiveauModal}
+        onClose={() => setShowNiveauModal(false)}
+        title="Sélectionner un niveau"
+        items={niveauxFiltres}
+        selectedId={selectedNiveauId}
+        onSelect={setSelectedNiveauId}
+        getItemLabel={(item) => item.nom}
+      />
+
+      <SelectorModal
+        visible={showSerieModal}
+        onClose={() => setShowSerieModal(false)}
+        title="Sélectionner une série"
+        items={series}
+        selectedId={selectedSerieId}
+        onSelect={(id) => {
+          setSelectedSerieId(id);
+          setSelectedOptionId('');
+        }}
+        getItemLabel={(item) => item.nom}
+        getItemSubLabel={(item) => item.code ? `Code: ${item.code}` : ''}
+      />
+
+      <SelectorModal
+        visible={showOptionModal}
+        onClose={() => setShowOptionModal(false)}
+        title="Sélectionner une option"
+        items={optionsFiltrees}
+        selectedId={selectedOptionId}
+        onSelect={setSelectedOptionId}
+        getItemLabel={(item) => `${item.code} - ${item.nom}`}
+      />
+
+      <SelectorModal
+        visible={showIndiceModal}
+        onClose={() => setShowIndiceModal(false)}
+        title="Sélectionner un indice"
+        items={indicesWithNone}
+        selectedId={selectedIndiceId}
+        onSelect={setSelectedIndiceId}
+        getItemLabel={(item) => item.valeur}
+        getItemSubLabel={(item) => item.type_indice === 'ALPHA' ? 'Lettre' : item.type_indice === 'NUMERIC' ? 'Chiffre' : ''}
+      />
+
+      <SelectorModal
+        visible={showModeleModal}
+        onClose={() => setShowModeleModal(false)}
+        title="Sélectionner un modèle de groupes"
+        items={modelesWithNone}
+        selectedId={selectedModeleGroupeId}
+        onSelect={setSelectedModeleGroupeId}
+        getItemLabel={(item) => item.nom}
+        getItemSubLabel={(item) => item.valeurs && item.valeurs.length > 0 ? `Groupes: ${item.valeurs.join(', ')}` : ''}
+      />
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  backButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  anneeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  anneeText: {
+    fontSize: 12,
+    color: '#065F46',
+    fontWeight: '500',
+  },
+  card: {
+    padding: 20,
+  },
+  cardTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 20,
+  },
+  modeSwitch: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 20,
+  },
+  modeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  modeButtonActive: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+  },
+  modeButtonText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  modeButtonTextActive: {
+    color: '#FFFFFF',
+  },
+  selectorContainer: {
+    marginBottom: 16,
+  },
+  selectorLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  required: {
+    color: '#EF4444',
+  },
+  selector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  selectorText: {
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  selectorPlaceholder: {
+    color: '#9CA3AF',
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#1F2937',
+    marginBottom: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  inputHint: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: -12,
+    marginBottom: 16,
+  },
+  previewContainer: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  previewLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 4,
+  },
+  previewName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1E40AF',
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 14,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  submitButton: {
+    flex: 1,
+    paddingVertical: 14,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  submitButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '85%',
+    maxHeight: '70%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  modalList: {
+    padding: 8,
+  },
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginVertical: 2,
+  },
+  modalItemActive: {
+    backgroundColor: '#EFF6FF',
+  },
+  modalItemContent: {
+    flex: 1,
+  },
+  modalItemText: {
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  modalItemTextActive: {
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  modalItemSubText: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+});

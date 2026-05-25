@@ -1,0 +1,901 @@
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Alert, TextInput, Switch, Modal } from 'react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, UserPlus, Building2, Calendar, Search, Check, X, Bell, Clock } from 'lucide-react-native';
+import { Card } from '@/components/Card';
+import theme from '@/constants/theme';
+
+// Types de délégation
+const DELEGATION_TYPES = [
+  { value: 'financiere', label: 'Financière', description: 'Gestion des encaissements, reçus, clôture' },
+  { value: 'pedagogique', label: 'Pédagogique', description: 'Gestion des classes, notes, enseignants' },
+  { value: 'administrative', label: 'Administrative', description: 'Inscriptions, documents, vie scolaire' },
+];
+
+// Rôles déléguables par type
+const ROLES_BY_TYPE: Record<string, Array<{ value: string; label: string; description: string }>> = {
+  financiere: [
+    { value: 'caissier', label: 'Caissier', description: 'Encaissements, reçus, clôture caisse, bordereaux' },
+    { value: 'assistant_comptable', label: 'Assistant comptable', description: 'Saisie factures, rapprochement, fiscalité' },
+  ],
+  pedagogique: [
+    { value: 'ae', label: 'Animateur d\'Établissement (AE)', description: 'Gestion d\'un département (avec plafond)' },
+    { value: 'de', label: 'Directeur des Études (DE)', description: 'Supervision pédagogique globale' },
+  ],
+  administrative: [
+    { value: 'personnel_administratif', label: 'Personnel Administratif', description: 'Inscriptions, paiements, documents' },
+    { value: 'personnel_vie_scolaire', label: 'Personnel Vie Scolaire', description: 'Absences, incidents, discipline' },
+  ],
+};
+
+interface Utilisateur {
+  id: string;
+  nom: string;
+  prenom: string;
+  email: string;
+  telephone?: string;
+}
+
+// Composant DatePicker simplifié
+const DatePicker = ({ value, onChange, placeholder }: { value: string; onChange: (date: string) => void; placeholder: string }) => {
+  return (
+    <input
+      type="date"
+      style={{
+        width: '100%',
+        padding: '10px 12px',
+        fontSize: '14px',
+        border: '1px solid #E5E7EB',
+        borderRadius: '8px',
+        backgroundColor: '#FFFFFF',
+        marginBottom: '16px',
+      }}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+    />
+  );
+};
+
+export default function NouvelleDelegationScreen() {
+  const { user } = useAuth();
+  const router = useRouter();
+  const { id: etablissementId } = useLocalSearchParams<{ id: string }>();
+  
+  // États pour la recherche d'utilisateur
+  const [searchEmail, setSearchEmail] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [foundUser, setFoundUser] = useState<Utilisateur | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  
+  // États pour le formulaire
+  const [submitting, setSubmitting] = useState(false);
+  const [etablissementNom, setEtablissementNom] = useState('');
+  const [selectedType, setSelectedType] = useState<string>('financiere');
+  const [selectedRole, setSelectedRole] = useState<string>('caissier');
+  const [departement, setDepartement] = useState('');
+  const [plafond, setPlafond] = useState('');
+  const [dateFin, setDateFin] = useState('');
+  const [isTemporaire, setIsTemporaire] = useState(false);
+  const [justification, setJustification] = useState('');
+
+  useEffect(() => {
+    if (etablissementId) {
+      fetchEtablissementNom();
+    }
+  }, [etablissementId]);
+
+  const fetchEtablissementNom = async () => {
+    if (!etablissementId) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('etablissements')
+        .select('nom')
+        .eq('id', etablissementId)
+        .single();
+      
+      if (error) throw error;
+      setEtablissementNom(data?.nom || '');
+    } catch (error) {
+      console.error('Error fetching etablissement nom:', error);
+    }
+  };
+
+  // Recherche d'utilisateur par email via Edge Function
+  const searchUserByEmail = async () => {
+    if (!searchEmail.trim()) {
+      setSearchError('Veuillez saisir un email');
+      return;
+    }
+
+    setSearching(true);
+    setSearchError(null);
+    setFoundUser(null);
+
+    try {
+      // Récupérer la session pour le token
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !sessionData.session) {
+        setSearchError('Vous devez être connecté');
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+
+      // Appel à l'Edge Function
+      const response = await fetch(
+        `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/search-user-by-email`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ email: searchEmail.trim().toLowerCase() }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erreur lors de la recherche');
+      }
+
+      if (result.found && result.user) {
+        setFoundUser(result.user);
+      } else {
+        setSearchError('Aucun utilisateur trouvé avec cet email');
+      }
+    } catch (error) {
+      console.error('Error searching user:', error);
+      setSearchError('Erreur lors de la recherche');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // Vérifier si l'utilisateur fait déjà partie de l'établissement
+  const checkUserInEtablissement = async (userId: string): Promise<boolean> => {
+    if (!etablissementId) return false;
+    
+    try {
+      const { data, error } = await supabase
+        .from('user_roles')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('etablissement_id', etablissementId)
+        .maybeSingle();
+      
+      if (error) throw error;
+      return !!data;
+    } catch (error) {
+      console.error('Error checking user in etablissement:', error);
+      return false;
+    }
+  };
+
+  // Confirmer la délégation (avant création)
+  const handleConfirmDelegation = () => {
+    setShowConfirmModal(true);
+  };
+
+  // Envoyer une notification in-app au délégué
+  const sendNotificationToDelegue = async (delegationId: string, delegueId: string, roleLabel: string) => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: delegueId,
+          type: 'delegation',
+          title: 'Nouvelle délégation',
+          message: `Vous avez reçu une délégation en tant que ${roleLabel}. Vérifiez vos nouveaux accès dans la sidebar.`,
+          data: { delegation_id: delegationId, role: selectedRole },
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+      
+      if (error) console.error('Error sending notification:', error);
+    } catch (error) {
+      console.error('Error sending notification:', error);
+    }
+  };
+
+  // Créer la délégation
+  const createDelegation = async () => {
+    if (!foundUser) return;
+    
+    // Vérifier que l'utilisateur fait partie de l'établissement
+    const isMember = await checkUserInEtablissement(foundUser.id);
+    if (!isMember) {
+      Alert.alert(
+        'Utilisateur non membre',
+        'Cet utilisateur ne fait pas partie de votre établissement. Vous ne pouvez pas lui déléguer des droits.',
+        [{ text: 'OK' }]
+      );
+      setShowConfirmModal(false);
+      return;
+    }
+    
+    setSubmitting(true);
+    
+    try {
+      const delegationData: any = {
+        delegant_id: user?.id,
+        delegue_id: foundUser.id,
+        etablissement_id: etablissementId,
+        type: selectedType,
+        role_delegue: selectedRole,
+        date_debut: new Date().toISOString(),
+        is_active: true,
+        droits: { lecture: true, ecriture: true },
+      };
+
+      if (departement) delegationData.departement = departement;
+      if (plafond) delegationData.plafond = parseInt(plafond);
+      if (isTemporaire && dateFin) delegationData.date_fin = dateFin;
+      if (justification) delegationData.justification = justification;
+
+      const { data, error } = await supabase
+        .from('delegations')
+        .insert(delegationData)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Envoyer une notification in-app au délégué
+      const roleLabel = ROLES_BY_TYPE[selectedType]?.find(r => r.value === selectedRole)?.label || selectedRole;
+      await sendNotificationToDelegue(data.id, foundUser.id, roleLabel);
+
+      Alert.alert(
+        'Succès',
+        `Délégation créée avec succès.${foundUser.prenom} ${foundUser.nom} a été notifié(e).`,
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+    } catch (error) {
+      console.error('Error creating delegation:', error);
+      Alert.alert('Erreur', 'Impossible de créer la délégation');
+    } finally {
+      setSubmitting(false);
+      setShowConfirmModal(false);
+    }
+  };
+
+  const getRoleLabel = () => {
+    return ROLES_BY_TYPE[selectedType]?.find(r => r.value === selectedRole)?.label || selectedRole;
+  };
+
+  const getRoleDescription = () => {
+    return ROLES_BY_TYPE[selectedType]?.find(r => r.value === selectedRole)?.description || '';
+  };
+
+  const showPlafondInput = selectedRole === 'ae';
+  const showDepartementInput = selectedRole === 'ae';
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/* En-tête */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <ArrowLeft size={24} color={theme.colors.neutral[600]} />
+        </TouchableOpacity>
+        <Text style={styles.title}>Nouvelle délégation</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      {/* Établissement */}
+      {etablissementNom && (
+        <View style={styles.etablissementInfo}>
+          <Building2 size={16} color={theme.colors.neutral[500]} />
+          <Text style={styles.etablissementNom}>{etablissementNom}</Text>
+        </View>
+      )}
+
+      {/* 1. Recherche de l'utilisateur */}
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>1. Rechercher l'utilisateur</Text>
+        
+        <View style={styles.searchRow}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Email de l'utilisateur"
+            value={searchEmail}
+            onChangeText={(text) => {
+              setSearchEmail(text);
+              setFoundUser(null);
+              setSearchError(null);
+            }}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+          <TouchableOpacity
+            style={styles.searchButton}
+            onPress={searchUserByEmail}
+            disabled={searching}
+          >
+            {searching ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Search size={16} color="#FFFFFF" />
+                <Text style={styles.searchButtonText}>Rechercher</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {searchError && (
+          <Text style={styles.errorText}>{searchError}</Text>
+        )}
+
+        {/* Carte utilisateur trouvé */}
+        {foundUser && (
+          <View style={styles.userCard}>
+            <View style={styles.userCardAvatar}>
+              <UserPlus size={24} color={theme.colors.primary.DEFAULT} />
+            </View>
+            <View style={styles.userCardInfo}>
+              <Text style={styles.userCardName}>
+                {foundUser.prenom} {foundUser.nom}
+              </Text>
+              <Text style={styles.userCardEmail}>{foundUser.email}</Text>
+              {foundUser.telephone && (
+                <Text style={styles.userCardPhone}>📞 {foundUser.telephone}</Text>
+              )}
+            </View>
+          </View>
+        )}
+      </Card>
+
+      {/* 2. Type de délégation (visible seulement si utilisateur trouvé) */}
+      {foundUser && (
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>2. Type de délégation</Text>
+          <View style={styles.typeContainer}>
+            {DELEGATION_TYPES.map((type) => (
+              <TouchableOpacity
+                key={type.value}
+                style={[
+                  styles.typeOption,
+                  selectedType === type.value && styles.typeOptionActive,
+                ]}
+                onPress={() => {
+                  setSelectedType(type.value);
+                  const firstRole = ROLES_BY_TYPE[type.value]?.[0]?.value || 'caissier';
+                  setSelectedRole(firstRole);
+                  setDepartement('');
+                  setPlafond('');
+                }}
+              >
+                <Text style={[
+                  styles.typeLabel,
+                  selectedType === type.value && styles.typeLabelActive,
+                ]}>
+                  {type.label}
+                </Text>
+                <Text style={styles.typeDescription}>{type.description}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Card>
+      )}
+
+      {/* 3. Rôle à déléguer */}
+      {foundUser && (
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>3. Rôle à déléguer</Text>
+          <View style={styles.roleContainer}>
+            {ROLES_BY_TYPE[selectedType]?.map((role) => (
+              <TouchableOpacity
+                key={role.value}
+                style={[
+                  styles.roleOption,
+                  selectedRole === role.value && styles.roleOptionActive,
+                ]}
+                onPress={() => {
+                  setSelectedRole(role.value);
+                  setDepartement('');
+                  setPlafond('');
+                }}
+              >
+                <Text style={[
+                  styles.roleLabel,
+                  selectedRole === role.value && styles.roleLabelActive,
+                ]}>
+                  {role.label}
+                </Text>
+                <Text style={styles.roleDescription}>{role.description}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Card>
+      )}
+
+      {/* 4. Informations complémentaires (AE seulement) */}
+      {foundUser && (showDepartementInput || showPlafondInput) && (
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>4. Informations complémentaires</Text>
+          
+          {showDepartementInput && (
+            <>
+              <Text style={styles.inputLabel}>Département (optionnel)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: Sciences, Lettres, Génie Mécanique"
+                value={departement}
+                onChangeText={setDepartement}
+              />
+            </>
+          )}
+          
+          {showPlafondInput && (
+            <>
+              <Text style={styles.inputLabel}>Plafond d'enseignants (optionnel)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Nombre maximum d'enseignants sous supervision"
+                value={plafond}
+                onChangeText={setPlafond}
+                keyboardType="numeric"
+              />
+              <Text style={styles.hintText}>
+                Laissez vide pour un plafond par défaut
+              </Text>
+            </>
+          )}
+        </Card>
+      )}
+
+      {/* 5. Durée de la délégation */}
+      {foundUser && (
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>5. Durée de la délégation</Text>
+          
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Délégation temporaire</Text>
+            <Switch
+              value={isTemporaire}
+              onValueChange={setIsTemporaire}
+              trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+
+          {isTemporaire && (
+            <>
+              <Text style={styles.inputLabel}>Date de fin *</Text>
+              <DatePicker
+                value={dateFin}
+                onChange={setDateFin}
+                placeholder="Sélectionner la date de fin"
+              />
+              <Text style={styles.hintText}>
+                Après cette date, la délégation expirera automatiquement
+              </Text>
+            </>
+          )}
+
+          {!isTemporaire && (
+            <View style={styles.permanentContainer}>
+              <Clock size={14} color="#10B981" />
+              <Text style={styles.permanentHint}>Délégation permanente (jusqu'à révocation explicite)</Text>
+            </View>
+          )}
+        </Card>
+      )}
+
+      {/* 6. Justification */}
+      {foundUser && (
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>6. Justification (optionnelle)</Text>
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            placeholder="Motif de la délégation..."
+            multiline
+            numberOfLines={3}
+            value={justification}
+            onChangeText={setJustification}
+          />
+        </Card>
+      )}
+
+      {/* Bouton de confirmation */}
+      {foundUser && (
+        <TouchableOpacity
+          style={styles.confirmButton}
+          onPress={handleConfirmDelegation}
+          disabled={submitting}
+        >
+          <Text style={styles.confirmButtonText}>Continuer →</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Modal de confirmation */}
+      <Modal
+        visible={showConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowConfirmModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Confirmer la délégation</Text>
+              <TouchableOpacity onPress={() => setShowConfirmModal(false)}>
+                <X size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubtitle}>
+              Vous êtes sur le point de déléguer les droits suivants :
+            </Text>
+
+            <View style={styles.confirmCard}>
+              <View style={styles.confirmRow}>
+                <Text style={styles.confirmLabel}>Délégué :</Text>
+                <Text style={styles.confirmValue}>{foundUser?.prenom} {foundUser?.nom}</Text>
+              </View>
+              <View style={styles.confirmRow}>
+                <Text style={styles.confirmLabel}>Type :</Text>
+                <Text style={styles.confirmValue}>
+                  {DELEGATION_TYPES.find(t => t.value === selectedType)?.label}
+                </Text>
+              </View>
+              <View style={styles.confirmRow}>
+                <Text style={styles.confirmLabel}>Rôle :</Text>
+                <Text style={styles.confirmValue}>{getRoleLabel()}</Text>
+              </View>
+              <View style={styles.confirmRow}>
+                <Text style={styles.confirmLabel}>Durée :</Text>
+                <Text style={styles.confirmValue}>
+                  {isTemporaire && dateFin ? `Jusqu'au ${new Date(dateFin).toLocaleDateString('fr-FR')}` : 'Permanente'}
+                </Text>
+              </View>
+              {justification ? (
+                <View style={styles.confirmRow}>
+                  <Text style={styles.confirmLabel}>Justification :</Text>
+                  <Text style={styles.confirmValue}>{justification}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setShowConfirmModal(false)}
+              >
+                <Text style={styles.cancelButtonText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.confirmButtonModal]}
+                onPress={createDelegation}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.confirmButtonModalText}>Confirmer</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  backButton: {
+    padding: 8,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  etablissementInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 16,
+    alignSelf: 'flex-start',
+  },
+  etablissementNom: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  section: {
+    marginBottom: 20,
+    padding: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  searchInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    backgroundColor: '#FFFFFF',
+  },
+  searchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  searchButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#EF4444',
+    marginTop: 8,
+  },
+  userCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.primary.light,
+  },
+  userCardAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userCardInfo: {
+    flex: 1,
+  },
+  userCardName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 2,
+  },
+  userCardEmail: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  userCardPhone: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  typeContainer: {
+    gap: 8,
+  },
+  typeOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  typeOptionActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  typeLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  typeLabelActive: {
+    color: theme.colors.primary.DEFAULT,
+  },
+  typeDescription: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  roleContainer: {
+    gap: 8,
+  },
+  roleOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  roleOptionActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  roleLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  roleLabelActive: {
+    color: theme.colors.primary.DEFAULT,
+  },
+  roleDescription: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#1F2937',
+    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  textArea: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  switchLabel: {
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  permanentContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  permanentHint: {
+    fontSize: 13,
+    color: '#10B981',
+  },
+  confirmButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 20,
+  },
+  confirmButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 16,
+  },
+  confirmCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  confirmRow: {
+    marginBottom: 10,
+  },
+  confirmLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6B7280',
+    marginBottom: 2,
+  },
+  confirmValue: {
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#F3F4F6',
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  confirmButtonModal: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+  },
+  confirmButtonModalText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+});

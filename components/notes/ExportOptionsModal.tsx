@@ -1,0 +1,848 @@
+// /home/project/components/notes/ExportOptionsModal.tsx
+// Modal de sélection des sections à exporter + sélection des colonnes
+// PHASE B.7 : Ajout du bouton "Aperçu"
+
+import { View, Text, StyleSheet, Modal, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { X, Check, Crown, Lock, Columns, Eye } from 'lucide-react-native';
+import { ExportOptions, ExportSection, EXPORT_SECTIONS, DEFAULT_EXPORT_OPTIONS } from '@/types/export.types';
+import { Periode } from '@/types/notes.types';
+import { ExportColumn, AVAILABLE_CLASSE_COLUMNS, AVAILABLE_MATIERE_COLUMNS, DEFAULT_CLASSE_COLUMNS, DEFAULT_MATIERE_COLUMNS } from '@/types/exportColumns.types';
+import { useExportColumns } from '@/hooks/useExportColumns';
+import { useAuth } from '@/contexts/AuthContext';
+import theme from '@/constants/theme';
+import PDFPreviewModal from './PDFPreviewModal';
+
+interface ExportOptionsModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onExport: (options: ExportOptions) => void;
+  onPreview?: (options: ExportOptions) => Promise<string | null>;  // ← NOUVEAU : génère un PDF pour aperçu
+  etablissementId: string;
+  periode: Periode;
+  periodeLabel: string;
+  anneeScolaireLibelle: string;
+  etablissementNom: string;
+  isSubscribed: boolean;
+  plan?: string | null;
+  defaultClasseId?: string;
+  defaultClasseNom?: string;
+  defaultMatiereId?: string;
+  defaultMatiereNom?: string;
+  type: 'classe' | 'matiere' | 'periode';
+}
+
+type TabType = 'sections' | 'colonnes';
+
+// Niveau d'abonnement requis par plan
+const getPlanLevel = (plan: string | null | undefined): number => {
+  if (plan === 'prestige') return 3;
+  if (plan === 'premium') return 2;
+  return 1;
+};
+
+// Vérifier si une section est accessible avec le plan actuel
+const isSectionAccessible = (requiredPlan: string | undefined, planLevel: number): boolean => {
+  if (!requiredPlan) return true;
+  const requiredLevel = requiredPlan === 'prestige' ? 3 : requiredPlan === 'premium' ? 2 : 1;
+  return planLevel >= requiredLevel;
+};
+
+export default function ExportOptionsModal({
+  visible,
+  onClose,
+  onExport,
+  onPreview,
+  etablissementId,
+  periode,
+  periodeLabel,
+  anneeScolaireLibelle,
+  etablissementNom,
+  isSubscribed,
+  plan,
+  defaultClasseId,
+  defaultClasseNom,
+  defaultMatiereId,
+  defaultMatiereNom,
+  type,
+}: ExportOptionsModalProps) {
+  const { user } = useAuth();
+  const planLevel = getPlanLevel(plan);
+  const [activeTab, setActiveTab] = useState<TabType>('sections');
+  
+  // État des sections sélectionnées
+  const [selectedSections, setSelectedSections] = useState<ExportSection[]>([]);
+  const [format, setFormat] = useState<'pdf' | 'excel'>(DEFAULT_EXPORT_OPTIONS.format as 'pdf' | 'excel');
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(DEFAULT_EXPORT_OPTIONS.orientation as 'portrait' | 'landscape');
+  
+  // NOUVEAU : État pour l'aperçu PDF
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  
+  // Version étendue de useExportColumns
+  const { 
+    classeColumns, 
+    matiereColumns, 
+    sections: savedSections,
+    format: savedFormat,
+    orientation: savedOrientation,
+    loading: columnsLoading,
+    updateClasseColumns, 
+    updateMatiereColumns, 
+    updateSections,
+    updateFormat,
+    updateOrientation,
+    resetToDefaults,
+  } = useExportColumns(user?.id, type);
+  
+  const [localClasseColumns, setLocalClasseColumns] = useState<ExportColumn[]>(classeColumns);
+  const [localMatiereColumns, setLocalMatiereColumns] = useState<ExportColumn[]>(matiereColumns);
+  
+  // Mettre à jour les colonnes locales quand les préférences chargent
+  useEffect(() => {
+    setLocalClasseColumns(classeColumns);
+    setLocalMatiereColumns(matiereColumns);
+  }, [classeColumns, matiereColumns]);
+  
+  // Initialiser les sections avec les préférences sauvegardées
+  useEffect(() => {
+    if (visible && savedSections.length > 0) {
+      setSelectedSections(savedSections);
+      setFormat(savedFormat);
+      setOrientation(savedOrientation);
+    }
+  }, [visible, savedSections, savedFormat, savedOrientation]);
+  
+  // Initialiser les sections par défaut si aucune préférence sauvegardée
+  useEffect(() => {
+    if (visible && savedSections.length === 0) {
+      const defaultSections = EXPORT_SECTIONS
+        .filter(section => {
+          if (!isSectionAccessible(section.requiredPlan, planLevel)) return false;
+          if (type === 'classe' && (section.id === 'graphiques' || section.id === 'tableauHonneur')) return false;
+          if (type === 'matiere' && (section.id === 'classesTable' || section.id === 'graphiques')) return false;
+          return section.defaultEnabled;
+        })
+        .map(section => section.id);
+      setSelectedSections(defaultSections);
+    }
+  }, [visible, type, planLevel, savedSections.length]);
+
+  const toggleSection = (sectionId: ExportSection) => {
+    setSelectedSections(prev =>
+      prev.includes(sectionId)
+        ? prev.filter(s => s !== sectionId)
+        : [...prev, sectionId]
+    );
+  };
+
+  const toggleClasseColumn = (columnId: ExportColumn) => {
+    setLocalClasseColumns(prev =>
+      prev.includes(columnId)
+        ? prev.filter(c => c !== columnId)
+        : [...prev, columnId]
+    );
+  };
+
+  const toggleMatiereColumn = (columnId: ExportColumn) => {
+    setLocalMatiereColumns(prev =>
+      prev.includes(columnId)
+        ? prev.filter(c => c !== columnId)
+        : [...prev, columnId]
+    );
+  };
+
+  const selectAllClasseColumns = () => {
+    setLocalClasseColumns(AVAILABLE_CLASSE_COLUMNS.map(c => c.id));
+  };
+
+  const deselectAllClasseColumns = () => {
+    setLocalClasseColumns([]);
+  };
+
+  const selectAllMatiereColumns = () => {
+    setLocalMatiereColumns(AVAILABLE_MATIERE_COLUMNS.map(c => c.id));
+  };
+
+  const deselectAllMatiereColumns = () => {
+    setLocalMatiereColumns([]);
+  };
+
+  const selectAll = () => {
+    const allAccessible = EXPORT_SECTIONS
+      .filter(section => {
+        if (!isSectionAccessible(section.requiredPlan, planLevel)) return false;
+        if (type === 'classe' && (section.id === 'graphiques' || section.id === 'tableauHonneur')) return false;
+        if (type === 'matiere' && (section.id === 'classesTable' || section.id === 'graphiques')) return false;
+        return true;
+      })
+      .map(section => section.id);
+    setSelectedSections(allAccessible);
+  };
+
+  const deselectAll = () => {
+    setSelectedSections([]);
+  };
+
+  // Construire les options d'export (partagé entre export et aperçu)
+  const buildExportOptions = (): ExportOptions => {
+    const exportOptions: ExportOptions = {
+      sections: selectedSections,
+      format,
+      orientation,
+      periode,
+      etablissementId,
+      etablissementNom,
+      anneeScolaireLibelle,
+      dateGeneration: new Date().toISOString(),
+      includeGraphiques: selectedSections.includes('graphiques'),
+      includeTableauHonneur: selectedSections.includes('tableauHonneur'),
+      includeSignaturesNumeriques: false,
+    };
+
+    if (type === 'classe') {
+      exportOptions.selectedColumns = localClasseColumns;
+      if (defaultClasseId) {
+        exportOptions.classeId = defaultClasseId;
+        exportOptions.classeNom = defaultClasseNom;
+      }
+    }
+    if (type === 'matiere') {
+      exportOptions.selectedColumns = localMatiereColumns;
+      if (defaultMatiereId) {
+        exportOptions.matiereId = defaultMatiereId;
+        exportOptions.matiereNom = defaultMatiereNom;
+      }
+    }
+
+    return exportOptions;
+  };
+
+  // Sauvegarder les préférences
+  const savePreferences = async () => {
+    await updateSections(selectedSections);
+    await updateFormat(format);
+    await updateOrientation(orientation);
+    if (type === 'classe') {
+      await updateClasseColumns(localClasseColumns);
+    } else if (type === 'matiere') {
+      await updateMatiereColumns(localMatiereColumns);
+    }
+  };
+
+  // Gestion de l'export
+  const handleExport = async () => {
+    if (selectedSections.length === 0) {
+      Alert.alert('Sélection requise', 'Veuillez sélectionner au moins une section à exporter.');
+      return;
+    }
+
+    await savePreferences();
+    const exportOptions = buildExportOptions();
+    onExport(exportOptions);
+    onClose();
+  };
+
+  // NOUVEAU : Gestion de l'aperçu
+  const handlePreview = async () => {
+    if (selectedSections.length === 0) {
+      Alert.alert('Sélection requise', 'Veuillez sélectionner au moins une section pour l\'aperçu.');
+      return;
+    }
+
+    if (format !== 'pdf') {
+      Alert.alert('Format incompatible', 'L\'aperçu est uniquement disponible au format PDF. Veuillez sélectionner PDF dans les options.');
+      return;
+    }
+
+    if (!onPreview) {
+      Alert.alert('Information', 'La fonction d\'aperçu n\'est pas disponible pour ce type d\'export.');
+      return;
+    }
+
+    setIsGeneratingPreview(true);
+    setPreviewUri(null);
+
+    try {
+      await savePreferences();
+      const exportOptions = buildExportOptions();
+      const pdfUri = await onPreview(exportOptions);
+      
+      if (pdfUri) {
+        setPreviewUri(pdfUri);
+        setPreviewVisible(true);
+      } else {
+        Alert.alert('Erreur', 'Impossible de générer l\'aperçu. Veuillez réessayer.');
+      }
+    } catch (error) {
+      console.error('Erreur aperçu:', error);
+      Alert.alert('Erreur', 'Une erreur est survenue lors de la génération de l\'aperçu.');
+    } finally {
+      setIsGeneratingPreview(false);
+    }
+  };
+
+  // Fermer le modal d'aperçu
+  const handleClosePreview = () => {
+    setPreviewVisible(false);
+    setPreviewUri(null);
+  };
+
+  if (!isSubscribed) {
+    return (
+      <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>⚙️ Options d'export</Text>
+              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                <X size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.disabledContainer}>
+              <Lock size={48} color="#9CA3AF" />
+              <Text style={styles.disabledTitle}>Abonnement requis</Text>
+              <Text style={styles.disabledText}>
+                Les exports enrichis nécessitent un abonnement actif.
+              </Text>
+              <TouchableOpacity style={styles.closeDisabledButton} onPress={onClose}>
+                <Text style={styles.closeDisabledText}>Fermer</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  return (
+    <>
+      <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>⚙️ Options d'export</Text>
+              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                <X size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.subtitle}>
+              {type === 'classe' && `Classe : ${defaultClasseNom || 'Non sélectionnée'}`}
+              {type === 'matiere' && `Matière : ${defaultMatiereNom || 'Non sélectionnée'}`}
+              {type === 'periode' && `Période : ${periodeLabel}`}
+            </Text>
+
+            {/* Onglets Sections / Colonnes */}
+            <View style={styles.tabsContainer}>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'sections' && styles.tabActive]}
+                onPress={() => setActiveTab('sections')}
+              >
+                <Text style={[styles.tabText, activeTab === 'sections' && styles.tabTextActive]}>
+                  Sections
+                </Text>
+              </TouchableOpacity>
+              {(type === 'classe' || type === 'matiere') && (
+                <TouchableOpacity
+                  style={[styles.tab, activeTab === 'colonnes' && styles.tabActive]}
+                  onPress={() => setActiveTab('colonnes')}
+                >
+                  <Columns size={14} color={activeTab === 'colonnes' ? '#FFFFFF' : '#6B7280'} />
+                  <Text style={[styles.tabText, activeTab === 'colonnes' && styles.tabTextActive]}>
+                    Colonnes
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              {activeTab === 'sections' ? (
+                <>
+                  <Text style={styles.infoText}>Sélectionnez les sections à inclure dans l'export :</Text>
+
+                  {EXPORT_SECTIONS.map((section) => {
+                    if (type === 'classe' && (section.id === 'graphiques' || section.id === 'tableauHonneur')) return null;
+                    if (type === 'matiere' && (section.id === 'classesTable' || section.id === 'graphiques')) return null;
+                    
+                    const status = isSectionAccessible(section.requiredPlan, planLevel);
+                    const isSelected = selectedSections.includes(section.id);
+                    
+                    return (
+                      <View key={section.id} style={styles.sectionItem}>
+                        <View style={styles.sectionInfo}>
+                          <Text style={styles.sectionLabel}>{section.label}</Text>
+                          <Text style={styles.sectionDescription}>{section.description}</Text>
+                          {!status && (
+                            <View style={styles.lockedBadge}>
+                              <Crown size={10} color="#F59E0B" />
+                              <Text style={styles.lockedText}>{section.requiredPlan === 'prestige' ? 'Prestige' : 'Premium'}</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Switch
+                          value={isSelected && status}
+                          onValueChange={() => status && toggleSection(section.id)}
+                          disabled={!status}
+                          trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+                          thumbColor={isSelected && status ? '#FFFFFF' : '#9CA3AF'}
+                        />
+                      </View>
+                    );
+                  })}
+
+                  {/* Actions rapides pour les sections */}
+                  <View style={styles.quickActions}>
+                    <TouchableOpacity onPress={selectAll} style={styles.quickActionButton}>
+                      <Text style={styles.quickActionText}>Tout cocher</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={deselectAll} style={styles.quickActionButton}>
+                      <Text style={styles.quickActionText}>Tout décocher</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  {type === 'classe' && (
+                    <>
+                      <Text style={styles.infoText}>Sélectionnez les colonnes à afficher dans le relevé de classe :</Text>
+                      
+                      {AVAILABLE_CLASSE_COLUMNS.map((column) => {
+                        const isSelected = localClasseColumns.includes(column.id);
+                        const isAccessible = !column.requiresPremium || planLevel >= 2;
+                        return (
+                          <View key={column.id} style={styles.sectionItem}>
+                            <View style={styles.sectionInfo}>
+                              <Text style={styles.sectionLabel}>{column.label}</Text>
+                              <Text style={styles.sectionDescription}>{column.description}</Text>
+                              {column.requiresPremium && planLevel < 2 && (
+                                <View style={styles.lockedBadge}>
+                                  <Crown size={10} color="#F59E0B" />
+                                  <Text style={styles.lockedText}>Premium</Text>
+                                </View>
+                              )}
+                            </View>
+                            <Switch
+                              value={isSelected}
+                              onValueChange={() => toggleClasseColumn(column.id)}
+                              disabled={!isAccessible}
+                              trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+                              thumbColor={isSelected ? '#FFFFFF' : '#9CA3AF'}
+                            />
+                          </View>
+                        );
+                      })}
+
+                      <View style={styles.quickActions}>
+                        <TouchableOpacity onPress={selectAllClasseColumns} style={styles.quickActionButton}>
+                          <Text style={styles.quickActionText}>Tout cocher</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={deselectAllClasseColumns} style={styles.quickActionButton}>
+                          <Text style={styles.quickActionText}>Tout décocher</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={resetToDefaults} style={styles.quickActionButton}>
+                          <Text style={styles.quickActionText}>Réinitialiser</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
+
+                  {type === 'matiere' && (
+                    <>
+                      <Text style={styles.infoText}>Sélectionnez les colonnes à afficher dans l'analyse de matière :</Text>
+                      
+                      {AVAILABLE_MATIERE_COLUMNS.map((column) => {
+                        const isSelected = localMatiereColumns.includes(column.id);
+                        return (
+                          <View key={column.id} style={styles.sectionItem}>
+                            <View style={styles.sectionInfo}>
+                              <Text style={styles.sectionLabel}>{column.label}</Text>
+                              <Text style={styles.sectionDescription}>{column.description}</Text>
+                            </View>
+                            <Switch
+                              value={isSelected}
+                              onValueChange={() => toggleMatiereColumn(column.id)}
+                              trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+                              thumbColor={isSelected ? '#FFFFFF' : '#9CA3AF'}
+                            />
+                          </View>
+                        );
+                      })}
+
+                      <View style={styles.quickActions}>
+                        <TouchableOpacity onPress={selectAllMatiereColumns} style={styles.quickActionButton}>
+                          <Text style={styles.quickActionText}>Tout cocher</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={deselectAllMatiereColumns} style={styles.quickActionButton}>
+                          <Text style={styles.quickActionText}>Tout décocher</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={resetToDefaults} style={styles.quickActionButton}>
+                          <Text style={styles.quickActionText}>Réinitialiser</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
+                </>
+              )}
+
+              {/* Format et orientation (communs aux deux onglets) */}
+              <View style={styles.formatContainer}>
+                <Text style={styles.formatSectionTitle}>Format et orientation</Text>
+                
+                <View style={styles.formatGroup}>
+                  <Text style={styles.formatLabel}>Format :</Text>
+                  <View style={styles.formatButtons}>
+                    <TouchableOpacity
+                      style={[styles.formatButton, format === 'excel' && styles.formatButtonActive]}
+                      onPress={() => setFormat('excel')}
+                    >
+                      <Text style={[styles.formatButtonText, format === 'excel' && styles.formatButtonTextActive]}>
+                        Excel
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.formatButton, format === 'pdf' && styles.formatButtonActive]}
+                      onPress={() => setFormat('pdf')}
+                    >
+                      <Text style={[styles.formatButtonText, format === 'pdf' && styles.formatButtonTextActive]}>
+                        PDF
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.formatGroup}>
+                  <Text style={styles.formatLabel}>Orientation :</Text>
+                  <View style={styles.formatButtons}>
+                    <TouchableOpacity
+                      style={[styles.formatButton, orientation === 'portrait' && styles.formatButtonActive]}
+                      onPress={() => setOrientation('portrait')}
+                    >
+                      <Text style={[styles.formatButtonText, orientation === 'portrait' && styles.formatButtonTextActive]}>
+                        Portrait
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.formatButton, orientation === 'landscape' && styles.formatButtonActive]}
+                      onPress={() => setOrientation('landscape')}
+                    >
+                      <Text style={[styles.formatButtonText, orientation === 'landscape' && styles.formatButtonTextActive]}>
+                        Paysage
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              {/* Note sur les préférences */}
+              <View style={styles.noteBox}>
+                <Text style={styles.noteText}>
+                  💡 Vos préférences de sections, colonnes, format et orientation sont automatiquement sauvegardées pour vos prochains exports.
+                </Text>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+                <Text style={styles.cancelText}>Annuler</Text>
+              </TouchableOpacity>
+              
+              {/* NOUVEAU : Bouton Aperçu (uniquement pour PDF) */}
+              {format === 'pdf' && (
+                <TouchableOpacity
+                  style={[styles.previewButton, isGeneratingPreview && styles.previewButtonDisabled]}
+                  onPress={handlePreview}
+                  disabled={isGeneratingPreview}
+                >
+                  <Eye size={18} color={theme.colors.primary.DEFAULT} />
+                  <Text style={styles.previewText}>
+                    {isGeneratingPreview ? 'Génération...' : 'Aperçu'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              
+              <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
+                <Check size={18} color="#FFFFFF" />
+                <Text style={styles.exportText}>Exporter ({selectedSections.length} section(s))</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal d'aperçu PDF */}
+      <PDFPreviewModal
+        visible={previewVisible}
+        onClose={handleClosePreview}
+        pdfUri={previewUri}
+        pdfFileName={`apercu_${type}_${periodeLabel}.pdf`}
+        isGenerating={isGeneratingPreview}
+      />
+    </>
+  );
+}
+
+const styles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    maxHeight: '85%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  tab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+  },
+  tabActive: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+  },
+  tabText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  tabTextActive: {
+    color: '#FFFFFF',
+  },
+  modalBody: {
+    maxHeight: 500,
+    paddingHorizontal: 20,
+  },
+  infoText: {
+    fontSize: 13,
+    color: '#6B7280',
+    paddingVertical: 12,
+  },
+  sectionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  sectionInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+    marginBottom: 2,
+  },
+  sectionDescription: {
+    fontSize: 11,
+    color: '#6B7280',
+  },
+  lockedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  lockedText: {
+    fontSize: 10,
+    color: '#F59E0B',
+    fontWeight: '500',
+  },
+  quickActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  quickActionButton: {
+    paddingVertical: 4,
+  },
+  quickActionText: {
+    fontSize: 12,
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  formatContainer: {
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+    gap: 12,
+  },
+  formatSectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  formatGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  formatLabel: {
+    fontSize: 13,
+    color: '#6B7280',
+    width: 70,
+  },
+  formatButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  formatButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+  },
+  formatButtonActive: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  formatButtonText: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  formatButtonTextActive: {
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  noteBox: {
+    backgroundColor: '#EFF6FF',
+    marginVertical: 12,
+    padding: 10,
+    borderRadius: 8,
+  },
+  noteText: {
+    fontSize: 11,
+    color: '#1E40AF',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+  },
+  cancelText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  previewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  previewButtonDisabled: {
+    opacity: 0.5,
+  },
+  previewText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.colors.primary.DEFAULT,
+  },
+  exportButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  exportText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  disabledContainer: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  disabledTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  disabledText: {
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  closeDisabledButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  closeDisabledText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

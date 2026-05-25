@@ -1,0 +1,10 @@
+// /home/project/app/(app)/enseignant/evaluations-notes.tsx
+// Route alternative pour "Évaluations & Notes"
+// Redirige vers notes.tsx pour éviter la duplication
+
+import { Redirect } from 'expo-router';
+
+export default function EvaluationsNotesRoute() {
+  // Redirection vers la route principale notes.tsx
+  return <Redirect href="/enseignant/notes" />;
+}

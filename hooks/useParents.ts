@@ -1,0 +1,1134 @@
+import { useState, useCallback } from 'react';
+import { supabase } from '@/lib/supabase';
+import { emailService } from '@/lib/emailService';
+import { Parent, ParentEleve, TypeLienParente, ParentWithDetails, EnfantInitiales, ParentExistsResult } from '@/types/parents.types';
+
+export interface Parent {
+  id: string;
+  nom: string;
+  prenom: string;
+  email: string;
+  telephone?: string;
+}
+
+export interface LienParental {
+  id: string;
+  parent_id: string;
+  eleve_id: string;
+  lien_parente: string;
+  est_principal: boolean;
+  parent_nom: string;
+  parent_prenom: string;
+  parent_email: string;
+  parent_telephone?: string;
+}
+
+// ============================================================
+// FONCTIONS UTILITAIRES
+// ============================================================
+
+/**
+ * Normalise un numéro de téléphone (supprime espaces, tirets, points, parenthèses)
+ */
+const normaliserTelephone = (tel: string): string => {
+  if (!tel) return '';
+  return tel.replace(/[\s\-\.\(\)]/g, '');
+};
+
+/**
+ * Normalise un email (minuscule, trim)
+ */
+const normaliserEmail = (email: string): string => {
+  if (!email) return '';
+  return email.trim().toLowerCase();
+};
+
+/**
+ * Met la première lettre de chaque mot en majuscule (title case)
+ */
+const toTitleCase = (str: string): string => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+    .split('-')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('-');
+};
+
+/**
+ * Formate un numéro de téléphone (10 chiffres Bénin)
+ */
+const formaterTelephone = (tel: string): string => {
+  const cleaned = tel.replace(/\D/g, '');
+  if (cleaned.length !== 10) return tel;
+  return `${cleaned.slice(0,2)} ${cleaned.slice(2,4)} ${cleaned.slice(4,6)} ${cleaned.slice(6,8)} ${cleaned.slice(8,10)}`;
+};
+
+/**
+ * Génère les initiales sur 3 lettres d'un prénom (format: "Arm...")
+ */
+const getInitiales3Lettres = (prenom: string): string => {
+  if (!prenom) return '';
+  const debut = prenom.substring(0, 3);
+  if (debut.length === 3) {
+    return debut.charAt(0).toUpperCase() + debut.slice(1).toLowerCase() + '...';
+  }
+  return debut.charAt(0).toUpperCase() + debut.slice(1).toLowerCase();
+};
+
+/**
+ * Génère un mot de passe temporaire basé sur le prénom
+ */
+const genererMotDePasseTemp = (prenom: string): string => {
+  const cleanPrenom = prenom.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const suffixe = Math.floor(Math.random() * 1000);
+  return `${cleanPrenom}${suffixe}`;
+};
+
+export function useParents() {
+  const [loading, setLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
+
+  // ============================================================
+  // FONCTION PRINCIPALE: Vérifier si un parent existe (téléphone OU email)
+  // ============================================================
+  
+  /**
+   * Vérifie si un parent existe déjà par téléphone ou par email
+   */
+  const verifierParentExistant = useCallback(async (
+    valeur: string,
+    type: 'telephone' | 'email'
+  ): Promise<ParentExistsResult> => {
+    if (!valeur || valeur.trim() === '') {
+      return { exists: false };
+    }
+
+    try {
+      let valeurRecherche = valeur.trim();
+      
+      if (type === 'telephone') {
+        valeurRecherche = valeurRecherche.replace(/\D/g, '');
+        console.log('🔍 Recherche téléphone normalisé:', valeurRecherche);
+      } else if (type === 'email') {
+        valeurRecherche = valeurRecherche.toLowerCase();
+        console.log('🔍 Recherche email normalisé:', valeurRecherche);
+      }
+
+      let parentQuery = supabase.from('parents').select('*');
+      
+      if (type === 'telephone') {
+        parentQuery = parentQuery.eq('telephone', valeurRecherche);
+      } else if (type === 'email') {
+        parentQuery = parentQuery.ilike('email_personnel', valeurRecherche);
+      }
+
+      const { data: parentData, error: parentError } = await parentQuery.maybeSingle();
+
+      console.log('📦 Résultat recherche parent:', { data: !!parentData, error: parentError });
+
+      if (parentError || !parentData) {
+        return { exists: false };
+      }
+
+      const enfants: EnfantInitiales[] = [];
+      
+      const { data: parentEleves, error: peError } = await supabase
+        .from('parent_eleve')
+        .select('eleve_id')
+        .eq('parent_id', parentData.id);
+
+      if (peError) {
+        console.error('Erreur récupération parent_eleve:', peError);
+      } else if (parentEleves && parentEleves.length > 0) {
+        for (const pe of parentEleves) {
+          const { data: eleveData } = await supabase
+            .from('eleves')
+            .select('user_id')
+            .eq('id', pe.eleve_id)
+            .single();
+
+          if (eleveData?.user_id) {
+            const { data: profileData } = await supabase
+              .from('profiles')
+              .select('prenom, nom')
+              .eq('id', eleveData.user_id)
+              .single();
+
+            if (profileData) {
+              const prenom = profileData.prenom || '';
+              const nom = profileData.nom || '';
+              enfants.push({
+                id: pe.eleve_id,
+                prenom: prenom,
+                initiale_3_lettres: getInitiales3Lettres(prenom),
+                nom_initial: nom ? nom.charAt(0).toUpperCase() : '',
+                affichage: `${getInitiales3Lettres(prenom)} ${nom ? nom.charAt(0).toUpperCase() : ''}.`
+              });
+            }
+          }
+        }
+      }
+
+      return {
+        exists: true,
+        parent: {
+          id: parentData.id,
+          user_id: parentData.user_id,
+          nom: parentData.nom,
+          prenom: parentData.prenom,
+          telephone: parentData.telephone,
+          email_snet: parentData.email_snet,
+          email_personnel: parentData.email_personnel,
+          premiere_connexion: parentData.premiere_connexion,
+          is_active: parentData.is_active,
+          created_at: parentData.created_at,
+          updated_at: parentData.updated_at,
+        },
+        enfants_initiales: enfants,
+        nb_enfants: enfants.length,
+      };
+    } catch (error) {
+      console.error('Error checking existing parent:', error);
+      return { exists: false };
+    }
+  }, []);
+
+  /**
+   * Vérifie si un parent existe par téléphone et valide par NOM
+   */
+  const verifierParentParTelephoneEtNom = useCallback(async (
+    telephone: string,
+    nomSaisi: string
+  ): Promise<{ valid: boolean; parent?: any; message?: string }> => {
+    if (!telephone || telephone.trim() === '') {
+      return { valid: false, message: 'Numéro de téléphone invalide' };
+    }
+
+    if (!nomSaisi || nomSaisi.trim() === '') {
+      return { valid: false, message: 'Veuillez saisir le nom du parent pour confirmation' };
+    }
+
+    try {
+      const telephoneNormalise = normaliserTelephone(telephone);
+      const nomRecherche = nomSaisi.trim().toUpperCase();
+
+      const { data: parentData, error } = await supabase
+        .from('parents')
+        .select('*')
+        .eq('telephone', telephoneNormalise)
+        .maybeSingle();
+
+      if (error || !parentData) {
+        return { valid: false, message: 'Aucun parent trouvé avec ce numéro' };
+      }
+
+      if (parentData.nom.toUpperCase() === nomRecherche) {
+        return {
+          valid: true,
+          parent: parentData,
+          message: `Parent confirmé : ${parentData.prenom} ${parentData.nom}`
+        };
+      } else {
+        return {
+          valid: false,
+          message: 'Nom incorrect. Veuillez vérifier et réessayer.'
+        };
+      }
+    } catch (error) {
+      console.error('Error verifying parent by phone and name:', error);
+      return { valid: false, message: 'Erreur lors de la vérification' };
+    }
+  }, []);
+
+  /**
+   * Vérifie si un parent existe par email et valide par NOM
+   */
+  const verifierParentParEmailEtNom = useCallback(async (
+    email: string,
+    nomSaisi: string
+  ): Promise<{ valid: boolean; parent?: any; message?: string }> => {
+    if (!email || email.trim() === '') {
+      return { valid: false, message: 'Email invalide' };
+    }
+
+    if (!nomSaisi || nomSaisi.trim() === '') {
+      return { valid: false, message: 'Veuillez saisir le nom du parent pour confirmation' };
+    }
+
+    try {
+      const emailNormalise = normaliserEmail(email);
+      const nomRecherche = nomSaisi.trim().toUpperCase();
+
+      const { data: parentData, error } = await supabase
+        .from('parents')
+        .select('*')
+        .ilike('email_personnel', emailNormalise)
+        .maybeSingle();
+
+      if (error || !parentData) {
+        return { valid: false, message: 'Aucun parent trouvé avec cet email' };
+      }
+
+      if (parentData.nom.toUpperCase() === nomRecherche) {
+        return {
+          valid: true,
+          parent: parentData,
+          message: `Parent confirmé : ${parentData.prenom} ${parentData.nom}`
+        };
+      } else {
+        return {
+          valid: false,
+          message: 'Nom incorrect. Veuillez vérifier et réessayer.'
+        };
+      }
+    } catch (error) {
+      console.error('Error verifying parent by email and name:', error);
+      return { valid: false, message: 'Erreur lors de la vérification' };
+    }
+  }, []);
+
+  /**
+   * Résout un conflit entre téléphone et email (priorité au téléphone)
+   */
+  const resoudreConflitParent = useCallback(async (
+    telephone: string,
+    email: string,
+    eleveId: string,
+    typeLien: string
+  ): Promise<{ success: boolean; parentId?: string; message?: string }> => {
+    try {
+      const telephoneNormalise = normaliserTelephone(telephone);
+      const emailNormalise = normaliserEmail(email);
+
+      const { data: parentByPhone } = await supabase
+        .from('parents')
+        .select('*')
+        .eq('telephone', telephoneNormalise)
+        .maybeSingle();
+
+      if (parentByPhone) {
+        const { data: parentByEmail } = await supabase
+          .from('parents')
+          .select('*')
+          .ilike('email_personnel', emailNormalise)
+          .maybeSingle();
+
+        if (parentByEmail && parentByEmail.id !== parentByPhone.id) {
+          await supabase
+            .from('parent_conflicts')
+            .insert({
+              telephone: telephoneNormalise,
+              email: emailNormalise,
+              parent_telephone_id: parentByPhone.id,
+              parent_email_id: parentByEmail.id,
+              resolution: 'telephone_priority',
+              resolved_by: (await supabase.auth.getUser()).data.user?.id,
+            });
+        }
+
+        return {
+          success: true,
+          parentId: parentByPhone.id,
+          message: 'Parent lié via le numéro de téléphone'
+        };
+      }
+
+      const { data: parentByEmail } = await supabase
+        .from('parents')
+        .select('*')
+        .ilike('email_personnel', emailNormalise)
+        .maybeSingle();
+
+      if (parentByEmail) {
+        return {
+          success: true,
+          parentId: parentByEmail.id,
+          message: 'Parent lié via l\'adresse email'
+        };
+      }
+
+      return { success: false, message: 'Aucun parent trouvé' };
+    } catch (error) {
+      console.error('Error resolving parent conflict:', error);
+      return { success: false, message: 'Erreur lors de la résolution du conflit' };
+    }
+  }, []);
+
+  /**
+   * Crée un nouveau parent
+   */
+  const creerParent = useCallback(async (
+    nom: string,
+    prenom: string,
+    telephone: string,
+    emailPersonnel?: string | null,
+    typeLien?: TypeLienParente
+  ): Promise<{ success: boolean; parent?: Parent; error?: string; motDePasseTemp?: string }> => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 
+                           process.env.NEXT_PUBLIC_SUPABASE_URL || 
+                           'https://dohqohgnnysbvykyruwy.supabase.co';
+      
+      const functionUrl = `${supabaseUrl}/functions/v1/create-parent`;
+  
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+  
+      if (!accessToken) {
+        return { success: false, error: 'Non authentifié' };
+      }
+  
+      const response = await fetch(functionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          nom,
+          prenom,
+          telephone,
+          email_personnel: emailPersonnel || null,
+        }),
+      });
+  
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Erreur HTTP ${response.status}`);
+      }
+  
+      const result = await response.json();
+  
+      if (!result.success) {
+        throw new Error(result.error || 'Erreur création parent');
+      }
+  
+      const parentData = result.data;
+  
+      return {
+        success: true,
+        parent: {
+          id: parentData.id,
+          nom: parentData.nom,
+          prenom: parentData.prenom,
+          telephone: parentData.telephone,
+          email: parentData.email_snet,
+        } as Parent,
+        motDePasseTemp: parentData.mot_de_passe_temp,
+      };
+    } catch (error) {
+      console.error('Error creating parent:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Erreur lors de la création du parent' };
+    }
+  }, []);
+
+  /**
+   * Lie un parent à un élève
+   */
+  const lierParentAEleve = useCallback(async (
+    parentId: string,
+    eleveId: string,
+    typeLien: TypeLienParente,
+    estPrincipal: boolean = false
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { error } = await supabase
+        .from('parent_eleve')
+        .insert({
+          parent_id: parentId,
+          eleve_id: eleveId,
+          type_lien: typeLien,
+          est_principal: estPrincipal,
+        });
+  
+      if (error) {
+        if (error.code === '23505' || error.message?.includes('duplicate key') || error.message?.includes('UNIQUE')) {
+          return { success: false, error: 'Ce parent est déjà lié à cet élève' };
+        }
+        throw error;
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error linking parent to eleve:', error);
+      return { success: false, error: 'Impossible de lier le parent' };
+    }
+  }, []);
+
+  /**
+   * Récupère tous les parents d'un élève
+   */
+  const getParentsByEleve = useCallback(async (eleveId: string): Promise<LienParental[]> => {
+    try {
+      const { data: liens, error: liensError } = await supabase
+        .from('parent_eleve')
+        .select('id, parent_id, type_lien, est_principal')
+        .eq('eleve_id', eleveId);
+
+      if (liensError) {
+        console.error('Erreur chargement parent_eleve:', liensError);
+        return [];
+      }
+
+      if (!liens || liens.length === 0) {
+        return [];
+      }
+
+      const parentIds = liens.map(l => l.parent_id);
+      const { data: parents, error: parentsError } = await supabase
+        .from('parents')
+        .select('id, nom, prenom, email_personnel, telephone')
+        .in('id', parentIds);
+
+      if (parentsError) {
+        console.error('Erreur chargement parents:', parentsError);
+        return [];
+      }
+
+      const parentsMap = new Map();
+      parents?.forEach(p => parentsMap.set(p.id, p));
+
+      return liens.map(lien => {
+        const parent = parentsMap.get(lien.parent_id);
+        return {
+          id: lien.id,
+          parent_id: lien.parent_id,
+          parent_nom: parent?.nom || '',
+          parent_prenom: parent?.prenom || '',
+          parent_email: parent?.email_personnel || '',
+          parent_telephone: parent?.telephone,
+          lien_parente: lien.type_lien,
+          est_principal: lien.est_principal,
+        };
+      });
+    } catch (error) {
+      console.error('Error getting parents by eleve:', error);
+      return [];
+    }
+  }, []);
+
+  /**
+   * Supprime le lien entre un parent et un élève
+   */
+  const retirerLienParentEleve = useCallback(async (
+    parentId: string,
+    eleveId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { error } = await supabase
+        .from('parent_eleve')
+        .delete()
+        .eq('parent_id', parentId)
+        .eq('eleve_id', eleveId);
+
+      if (error) throw error;
+      return { success: true };
+    } catch (error) {
+      console.error('Error removing parent-eleve link:', error);
+      return { success: false, error: 'Impossible de retirer le lien' };
+    }
+  }, []);
+
+  // ============================================================
+  // FONCTIONS POUR GESTION DES CONFLITS PARENTS
+  // ============================================================
+
+  /**
+   * Journalise un conflit entre téléphone et email
+   */
+  const journaliserConflit = useCallback(async (
+    telephone: string,
+    email: string,
+    parentTelephoneId: string,
+    parentEmailId: string,
+    metadata?: Record<string, any>
+  ): Promise<{ success: boolean; conflict_id?: string; error?: string }> => {
+    try {
+      const { data, error } = await supabase
+        .rpc('journaliser_conflit_parent', {
+          p_telephone: telephone,
+          p_email: email,
+          p_parent_telephone_id: parentTelephoneId,
+          p_parent_email_id: parentEmailId,
+          p_metadata: metadata || {},
+        });
+
+      if (error) throw error;
+
+      return { success: true, conflict_id: data };
+    } catch (error) {
+      console.error('Error journalizing parent conflict:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Erreur lors de la journalisation' };
+    }
+  }, []);
+
+  /**
+   * Résout un conflit (priorité au téléphone)
+   */
+  const resoudreConflitParentAvecPriorite = useCallback(async (
+    telephone: string,
+    email: string,
+    eleveId: string,
+    typeLien: string,
+    parentTelephoneInfo?: { id: string; nom: string; prenom: string },
+    parentEmailInfo?: { id: string; nom: string; prenom: string }
+  ): Promise<{ success: boolean; parentId?: string; message?: string; conflict_id?: string }> => {
+    try {
+      const telephoneNormalise = normaliserTelephone(telephone);
+      const emailNormalise = normaliserEmail(email);
+
+      const { data: parentByPhone, error: phoneError } = await supabase
+        .from('parents')
+        .select('id, nom, prenom')
+        .eq('telephone', telephoneNormalise)
+        .maybeSingle();
+
+      if (phoneError) {
+        console.error('Error searching parent by phone:', phoneError);
+        return { success: false, message: 'Erreur lors de la recherche par téléphone' };
+      }
+
+      const { data: parentByEmail, error: emailError } = await supabase
+        .from('parents')
+        .select('id, nom, prenom')
+        .ilike('email_personnel', emailNormalise)
+        .maybeSingle();
+
+      if (emailError) {
+        console.error('Error searching parent by email:', emailError);
+        return { success: false, message: 'Erreur lors de la recherche par email' };
+      }
+
+      if (parentByPhone && parentByEmail && parentByPhone.id === parentByEmail.id) {
+        return {
+          success: true,
+          parentId: parentByPhone.id,
+          message: `Parent trouvé : ${parentByPhone.prenom} ${parentByPhone.nom}`,
+        };
+      }
+
+      if (parentByPhone && !parentByEmail) {
+        return {
+          success: true,
+          parentId: parentByPhone.id,
+          message: `Parent trouvé par téléphone : ${parentByPhone.prenom} ${parentByPhone.nom}`,
+        };
+      }
+
+      if (!parentByPhone && parentByEmail) {
+        return {
+          success: true,
+          parentId: parentByEmail.id,
+          message: `Parent trouvé par email : ${parentByEmail.prenom} ${parentByEmail.nom}`,
+        };
+      }
+
+      if (parentByPhone && parentByEmail && parentByPhone.id !== parentByEmail.id) {
+        const conflictResult = await journaliserConflit(
+          telephoneNormalise,
+          emailNormalise,
+          parentByPhone.id,
+          parentByEmail.id,
+          { eleve_id: eleveId, type_lien: typeLien }
+        );
+
+        return {
+          success: true,
+          parentId: parentByPhone.id,
+          message: `⚠️ Conflit détecté. Parent lié par téléphone (${parentByPhone.prenom} ${parentByPhone.nom}). Un email a été journalisé pour le support.`,
+          conflict_id: conflictResult.conflict_id,
+        };
+      }
+
+      return { success: false, message: 'Aucun parent trouvé' };
+    } catch (error) {
+      console.error('Error resolving parent conflict:', error);
+      return { success: false, message: 'Erreur lors de la résolution du conflit' };
+    }
+  }, [journaliserConflit]);
+
+  /**
+   * Récupère tous les conflits non résolus (pour l'interface admin)
+   */
+  const getPendingConflicts = useCallback(async (): Promise<{
+    success: boolean;
+    conflicts?: any[];
+    error?: string;
+  }> => {
+    try {
+      const { data, error } = await supabase
+        .from('parent_conflicts')
+        .select(`
+          *,
+          parent_telephone:parent_telephone_id (id, nom, prenom, telephone),
+          parent_email:parent_email_id (id, nom, prenom, email_personnel)
+        `)
+        .eq('resolution', 'pending')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      return { success: true, conflicts: data || [] };
+    } catch (error) {
+      console.error('Error getting pending conflicts:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Erreur lors de la récupération' };
+    }
+  }, []);
+
+  /**
+   * Résout manuellement un conflit (pour l'interface admin)
+   */
+  const resolveConflictManually = useCallback(async (
+    conflictId: string,
+    resolution: 'telephone_priority' | 'email_priority' | 'ignored',
+    parentIdToKeep?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      
+      const updateData: any = {
+        resolution,
+        resolved_by: userData.user?.id,
+        resolved_at: new Date().toISOString(),
+      };
+
+      if (resolution === 'telephone_priority' && parentIdToKeep) {
+        updateData.parent_telephone_id = parentIdToKeep;
+      } else if (resolution === 'email_priority' && parentIdToKeep) {
+        updateData.parent_email_id = parentIdToKeep;
+      }
+
+      const { error } = await supabase
+        .from('parent_conflicts')
+        .update(updateData)
+        .eq('id', conflictId);
+
+      if (error) throw error;
+
+      return { success: true };
+    } catch (error) {
+      console.error('Error resolving conflict manually:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Erreur lors de la résolution' };
+    }
+  }, []);
+
+  // ============================================================
+  // FONCTIONS EXISTANTES (legacy)
+  // ============================================================
+
+  const searchParentByEmail = useCallback(async (email: string): Promise<Parent | null> => {
+    if (!email || email.trim() === '') return null;
+    
+    setSearching(true);
+    try {
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('id, email')
+        .eq('email', normaliserEmail(email))
+        .maybeSingle();
+
+      if (userError || !userData) {
+        return null;
+      }
+
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('id, nom, prenom, telephone')
+        .eq('id', userData.id)
+        .maybeSingle();
+
+      if (profileError || !profileData) {
+        return null;
+      }
+
+      return {
+        id: profileData.id,
+        nom: profileData.nom || '',
+        prenom: profileData.prenom || '',
+        email: userData.email,
+        telephone: profileData.telephone,
+      };
+    } catch (error) {
+      console.error('Error searching parent:', error);
+      return null;
+    } finally {
+      setSearching(false);
+    }
+  }, []);
+
+  const createParentInvitation = useCallback(async (
+    email: string,
+    nom: string,
+    prenom: string,
+    telephone?: string,
+    etablissementId?: string
+  ): Promise<{ success: boolean; invitation_id?: string; error?: string }> => {
+    try {
+      const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+
+      const { data, error } = await supabase
+        .from('invitation_codes')
+        .insert({
+          email: normaliserEmail(email),
+          nom: nom.toUpperCase(),
+          prenom: toTitleCase(prenom),
+          telephone: telephone ? normaliserTelephone(telephone) : null,
+          role: 'parent',
+          code,
+          etablissement_id: etablissementId || null,
+          expires_at: expiresAt.toISOString(),
+          is_active: true,
+          statut: 'en_attente',
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return { success: true, invitation_id: data.id };
+    } catch (error) {
+      console.error('Error creating parent invitation:', error);
+      return { success: false, error: 'Impossible de créer l\'invitation' };
+    }
+  }, []);
+
+  const linkParentToEleve = useCallback(async (
+    parentId: string,
+    eleveId: string,
+    lienParente: string,
+    estPrincipal: boolean = false
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { error } = await supabase
+        .from('parents_eleves')
+        .insert({
+          parent_id: parentId,
+          eleve_id: eleveId,
+          lien_parente: lienParente,
+          est_principal: estPrincipal,
+        });
+
+      if (error) throw error;
+      return { success: true };
+    } catch (error) {
+      console.error('Error linking parent to eleve:', error);
+      return { success: false, error: 'Impossible de lier le parent' };
+    }
+  }, []);
+
+  const unlinkParentFromEleve = useCallback(async (
+    parentId: string,
+    eleveId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { error } = await supabase
+        .from('parents_eleves')
+        .delete()
+        .eq('parent_id', parentId)
+        .eq('eleve_id', eleveId);
+
+      if (error) throw error;
+      return { success: true };
+    } catch (error) {
+      console.error('Error unlinking parent from eleve:', error);
+      return { success: false, error: 'Impossible de retirer le lien' };
+    }
+  }, []);
+
+  const getParentsByEleveLegacy = useCallback(async (eleveId: string): Promise<LienParental[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('parents_eleves')
+        .select(`
+          id,
+          parent_id,
+          eleve_id,
+          lien_parente,
+          est_principal,
+          profiles:parent_id (nom, prenom, telephone)
+        `)
+        .eq('eleve_id', eleveId);
+
+      if (error) throw error;
+
+      const parentsWithEmail: LienParental[] = [];
+      
+      for (const item of (data || [])) {
+        const { data: userData } = await supabase
+          .from('users')
+          .select('email')
+          .eq('id', item.parent_id)
+          .single();
+        
+        parentsWithEmail.push({
+          id: item.id,
+          parent_id: item.parent_id,
+          eleve_id: item.eleve_id,
+          lien_parente: item.lien_parente,
+          est_principal: item.est_principal,
+          parent_nom: (item.profiles as any)?.nom || '',
+          parent_prenom: (item.profiles as any)?.prenom || '',
+          parent_email: userData?.email || '',
+          parent_telephone: (item.profiles as any)?.telephone,
+        });
+      }
+      
+      return parentsWithEmail;
+    } catch (error) {
+      console.error('Error getting parents by eleve:', error);
+      return [];
+    }
+  }, []);
+
+  /**
+   * Crée un parent SANS compte auth (simple insertion en base)
+   * Avec envoi d'email d'invitation et notification in-app
+   */
+  const creerParentSansAuth = useCallback(async (
+    nom: string,
+    prenom: string,
+    telephone: string,
+    emailPersonnel?: string | null,
+    typeLien?: TypeLienParente,
+    etablissementNom?: string,
+    eleveNom?: string
+  ): Promise<{ success: boolean; parent?: Parent; error?: string; codeInvitation?: string }> => {
+    try {
+      const nomFormate = nom.toUpperCase();
+      const prenomFormate = toTitleCase(prenom);
+      const telephoneNormalise = normaliserTelephone(telephone);
+      const emailPersonnelNormalise = emailPersonnel ? normaliserEmail(emailPersonnel) : null;
+
+      // Générer un email SNET temporaire
+      const normalize = (str: string) => {
+        return str
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9.-]/g, '')
+          .replace(/\.+/g, '.')
+          .replace(/^\.|\.$/g, '');
+      };
+      let emailSnet = `${normalize(prenomFormate)}.${normalize(nomFormate)}@snet.bj`;
+      
+      let suffixe = 1;
+      let exists = true;
+      while (exists && suffixe < 100) {
+        const { data: check } = await supabase
+          .from('parents')
+          .select('id')
+          .eq('email_snet', emailSnet)
+          .maybeSingle();
+        if (!check) {
+          exists = false;
+        } else {
+          emailSnet = `${normalize(prenomFormate)}.${normalize(nomFormate)}.${suffixe}@snet.bj`;
+          suffixe++;
+        }
+      }
+
+      // Générer un mot de passe temporaire
+      const parentMotDePasse = genererMotDePasseTemp(prenomFormate);
+
+      // Générer un code d'invitation unique
+      const codeInvitation = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+
+      // Insérer le parent
+      const { data: parentData, error: parentError } = await supabase
+        .from('parents')
+        .insert({
+          user_id: null,
+          nom: nomFormate,
+          prenom: prenomFormate,
+          telephone: telephoneNormalise,
+          email_snet: emailSnet,
+          email_personnel: emailPersonnelNormalise,
+          mot_de_passe_temp: parentMotDePasse,
+          premiere_connexion: true,
+          is_active: true,
+        })
+        .select()
+        .single();
+
+      if (parentError) {
+        console.error('Erreur insertion parent:', parentError);
+        return { success: false, error: parentError.message };
+      }
+
+      // Créer l'invitation
+      const { error: invitationError } = await supabase
+        .from('invitation_codes')
+        .insert({
+          code: codeInvitation,
+          parent_id: parentData.id,
+          telephone: telephoneNormalise,
+          email: emailPersonnelNormalise,
+          expires_at: expiresAt.toISOString(),
+          is_active: true,
+        });
+
+      if (invitationError) {
+        console.error('Erreur création invitation:', invitationError);
+      }
+
+      // 1. ENVOI DE L'EMAIL D'INVITATION (si email fourni)
+      if (emailPersonnelNormalise) {
+        try {
+          await emailService.envoyerInvitation({
+            email: emailPersonnelNormalise,
+            nom: nomFormate,
+            prenom: prenomFormate,
+            emailSnet: emailSnet,
+            motDePasseTemp: parentMotDePasse,
+            codeInvitation: codeInvitation,
+            etablissementNom: etablissementNom || null,
+            eleveNom: eleveNom || null,
+          });
+          console.log(`✅ Email d'invitation envoyé à ${emailPersonnelNormalise}`);
+        } catch (emailError) {
+          console.error('Erreur envoi email:', emailError);
+          // On continue même si l'email échoue
+        }
+      }
+
+      // 2. CRÉATION DE LA NOTIFICATION IN-APP
+      const { error: notifError } = await supabase
+        .from('notifications')
+        .insert({
+          parent_id: parentData.id,
+          user_id: null,
+          titre: 'Bienvenue sur SchoolNet',
+          contenu: `Un compte parent a été créé pour vous. Connectez-vous avec ${emailSnet} et le mot de passe temporaire : ${parentMotDePasse}`,
+          type: 'COMPTE_CREE',
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+
+      if (notifError) {
+        console.error('Erreur création notification:', notifError);
+      }
+
+      // 3. ENVOI DE LA NOTIFICATION VIA EDGE FUNCTION (EMAIL + IN-APP)
+      if (parentData && emailPersonnelNormalise) {
+        try {
+          await supabase.functions.invoke('notifications-parent', {
+            body: {
+              parent_id: parentData.id,
+              type: 'COMPTE_PARENT_CREE',
+              data: {
+                nom: nomFormate,
+                prenom: prenomFormate,
+                email_snet: emailSnet,
+                mot_de_passe_temp: parentMotDePasse,
+                code_invitation: codeInvitation,
+              },
+              canal: 'BOTH',
+            },
+          });
+          console.log(`✅ Notification envoyée au parent ${emailSnet}`);
+        } catch (notifError) {
+          console.error('Erreur envoi notification via Edge Function:', notifError);
+        }
+      }
+
+      return {
+        success: true,
+        parent: {
+          id: parentData.id,
+          nom: parentData.nom,
+          prenom: parentData.prenom,
+          telephone: parentData.telephone,
+          email: parentData.email_snet,
+        } as Parent,
+        codeInvitation,
+      };
+    } catch (error) {
+      console.error('Error creating parent without auth:', error);
+      return { success: false, error: 'Erreur lors de la création du parent' };
+    }
+  }, []);
+
+  /**
+   * Récupère les types de liens déjà utilisés pour un élève
+   */
+  const getExistingLiensForEleve = useCallback(async (eleveId: string): Promise<string[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('parent_eleve')
+        .select('type_lien')
+        .eq('eleve_id', eleveId)
+        .in('type_lien', ['pere', 'mere']);
+
+      if (error) {
+        console.error('Erreur récupération liens existants:', error);
+        return [];
+      }
+
+      return (data || []).map(item => item.type_lien);
+    } catch (error) {
+      console.error('Error getting existing liens:', error);
+      return [];
+    }
+  }, []);
+
+  /**
+   * Vérifie si un parent principal existe déjà pour cet élève
+   */
+  const hasParentPrincipalForEleve = useCallback(async (eleveId: string): Promise<boolean> => {
+    try {
+      const { data, error } = await supabase
+        .from('parent_eleve')
+        .select('id')
+        .eq('eleve_id', eleveId)
+        .eq('est_principal', true)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Erreur vérification parent principal:', error);
+        return false;
+      }
+
+      return !!data;
+    } catch (error) {
+      console.error('Error checking parent principal:', error);
+      return false;
+    }
+  }, []);
+
+  return {
+    loading,
+    searching,
+    verifierParentExistant,
+    verifierParentParTelephoneEtNom,
+    verifierParentParEmailEtNom,
+    resoudreConflitParent,
+    creerParent,
+    lierParentAEleve,
+    getParentsByEleve,
+    retirerLienParentEleve,
+    normaliserTelephone,
+    normaliserEmail,
+    toTitleCase,
+    formaterTelephone,
+    getInitiales3Lettres,
+    searchParentByEmail,
+    createParentInvitation,
+    linkParentToEleve,
+    unlinkParentFromEleve,
+    getParentsByEleveLegacy,
+    journaliserConflit,
+    resoudreConflitParent: resoudreConflitParentAvecPriorite,
+    getPendingConflicts,
+    resolveConflictManually,
+    creerParentSansAuth,
+    getExistingLiensForEleve,
+    hasParentPrincipalForEleve,
+  };
+}

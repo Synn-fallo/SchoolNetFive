@@ -1,0 +1,351 @@
+// /home/project/components/notes/ValidationPeriodesCard.tsx
+// Carte de gestion des périodes (Ouvert/Fermé/Exporter)
+// Version alignée avec la table periodes_validation (periode_id)
+
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { Lock, Unlock, Download, Calendar } from 'lucide-react-native';
+import { supabase } from '@/lib/supabase';
+import { PeriodStatus } from '@/types/notes.types';
+import theme from '@/constants/theme';
+
+interface PeriodeInfo {
+  id: string;
+  libelle: string;
+  ordre: number;
+}
+
+interface ValidationPeriodesCardProps {
+  etablissementId: string;
+  anneeScolaireId: string;
+  selectedPeriodeId: string;
+  selectedPeriodeLabel: string;
+  periodStatus: PeriodStatus;
+  onOpen: (periodeId: string, periodeLibelle: string) => Promise<boolean>;
+  onClose: (periodeId: string, periodeLibelle: string) => Promise<boolean>;
+  onExport: (periodeId: string, periodeLabel: string, format: 'pdf' | 'excel') => Promise<void>;
+  isSubscribed: boolean;
+}
+
+export default function ValidationPeriodesCard({
+  etablissementId,
+  anneeScolaireId,
+  selectedPeriodeId,
+  selectedPeriodeLabel,
+  periodStatus,
+  onOpen,
+  onClose,
+  onExport,
+  isSubscribed,
+}: ValidationPeriodesCardProps) {
+  const [isLoading, setIsLoading] = useState(false);
+  const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
+  const [periodes, setPeriodes] = useState<PeriodeInfo[]>([]);
+
+  // DEBUG: Afficher les props reçues
+  console.log('🔍 [ValidationPeriodesCard] periodStatus:', periodStatus);
+  console.log('🔍 [ValidationPeriodesCard] selectedPeriodeLabel:', selectedPeriodeLabel);
+  console.log('🔍 [ValidationPeriodesCard] currentStatus:', periodStatus[selectedPeriodeLabel]);
+
+  // Charger les périodes pour avoir les IDs
+  useEffect(() => {
+    loadPeriodes();
+  }, [etablissementId, anneeScolaireId]);
+
+  const loadPeriodes = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('periodes')
+        .select('id, libelle, ordre')
+        .eq('etablissement_id', etablissementId)
+        .eq('annee_scolaire_id', anneeScolaireId)
+        .eq('categorie', 'normale')
+        .order('ordre', { ascending: true });
+
+      if (error) throw error;
+      setPeriodes(data || []);
+      console.log('🔍 [ValidationPeriodesCard] Périodes chargées:', data);
+    } catch (error) {
+      console.error('Erreur chargement périodes:', error);
+    }
+  };
+
+  // Utiliser le statut réel depuis periodStatus
+  const currentStatus = periodStatus[selectedPeriodeLabel] || { isOpen: false, isValidated: false };
+  const { isOpen, isValidated } = currentStatus;
+
+  console.log('🔍 [ValidationPeriodesCard] isOpen calculé:', isOpen);
+  console.log('🔍 [ValidationPeriodesCard] isValidated calculé:', isValidated);
+
+  const handleOpen = async () => {
+    if (!isSubscribed) {
+      Alert.alert('Abonnement requis', 'L\'ouverture de période nécessite un abonnement actif.');
+      return;
+    }
+
+    setIsLoading(true);
+    const success = await onOpen(selectedPeriodeId, selectedPeriodeLabel);
+    setIsLoading(false);
+    Alert.alert(success ? 'Succès' : 'Erreur', success ? `Période ouverte` : `Impossible d'ouvrir la période`);
+  };
+
+  const handleClose = async () => {
+    if (!isSubscribed) {
+      Alert.alert('Abonnement requis', 'La fermeture de période nécessite un abonnement actif.');
+      return;
+    }
+
+    setIsLoading(true);
+    const success = await onClose(selectedPeriodeId, selectedPeriodeLabel);
+    setIsLoading(false);
+    Alert.alert(success ? 'Succès' : 'Erreur', success ? `Période fermée` : `Impossible de fermer la période`);
+  };
+
+  const handleExport = async (format: 'pdf' | 'excel') => {
+    if (!isSubscribed) {
+      Alert.alert('Abonnement requis', 'L\'export nécessite un abonnement actif.');
+      return;
+    }
+
+    setExporting(format);
+    await onExport(selectedPeriodeId, selectedPeriodeLabel, format);
+    setExporting(null);
+  };
+
+  if (!isSubscribed) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>🔒 Gestion des périodes</Text>
+        <View style={styles.disabledCard}>
+          <Lock size={20} color="#9CA3AF" />
+          <Text style={styles.disabledText}>Abonnement requis pour gérer les périodes</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>🔒 Gestion des périodes</Text>
+
+      <View style={styles.periodCard}>
+        <View style={styles.periodHeader}>
+          <Calendar size={18} color={isValidated ? '#10B981' : theme.colors.primary.DEFAULT} />
+          <Text style={[styles.periodName, isValidated && styles.periodNameValidated]}>
+            {selectedPeriodeLabel}
+          </Text>
+          <View style={styles.statusBadge}>
+            {isValidated ? (
+              <>
+                <Lock size={12} color="#10B981" />
+                <Text style={styles.statusValidatedText}>Validée</Text>
+              </>
+            ) : isOpen ? (
+              <>
+                <Unlock size={12} color="#F59E0B" />
+                <Text style={styles.statusOpenText}>Ouverte</Text>
+              </>
+            ) : (
+              <>
+                <Lock size={12} color="#6B7280" />
+                <Text style={styles.statusClosedText}>Fermée</Text>
+              </>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.periodActions}>
+          {/* Bouton Ouvrir/Fermer - toujours visible si non validée */}
+          {!isValidated && (
+            <TouchableOpacity
+              style={[styles.actionButton, isOpen ? styles.closeButton : styles.openButton]}
+              onPress={isOpen ? handleClose : handleOpen}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color={isOpen ? '#EF4444' : '#10B981'} />
+              ) : (
+                <>
+                  {isOpen ? <Lock size={14} color="#EF4444" /> : <Unlock size={14} color="#10B981" />}
+                  <Text style={[styles.actionText, isOpen ? styles.closeText : styles.openText]}>
+                    {isOpen ? 'Fermer' : 'Ouvrir'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {/* Bouton Export PDF */}
+          <TouchableOpacity
+            style={[styles.actionButton, styles.exportButton]}
+            onPress={() => handleExport('pdf')}
+            disabled={exporting !== null}
+          >
+            {exporting === 'pdf' ? (
+              <ActivityIndicator size="small" color={theme.colors.primary.DEFAULT} />
+            ) : (
+              <>
+                <Download size={14} color={theme.colors.primary.DEFAULT} />
+                <Text style={styles.exportText}>PDF</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          {/* Bouton Export Excel */}
+          <TouchableOpacity
+            style={[styles.actionButton, styles.exportButton]}
+            onPress={() => handleExport('excel')}
+            disabled={exporting !== null}
+          >
+            {exporting === 'excel' ? (
+              <ActivityIndicator size="small" color={theme.colors.primary.DEFAULT} />
+            ) : (
+              <>
+                <Download size={14} color={theme.colors.primary.DEFAULT} />
+                <Text style={styles.exportText}>Excel</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {isValidated && (
+          <View style={styles.validatedInfo}>
+            <Lock size={14} color="#10B981" />
+            <Text style={styles.validatedText}>Période validée – Les notes sont définitives</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  periodCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 16,
+  },
+  periodHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  periodName: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginLeft: 10,
+  },
+  periodNameValidated: {
+    color: '#10B981',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+  },
+  statusValidatedText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#10B981',
+  },
+  statusOpenText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#F59E0B',
+  },
+  statusClosedText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  periodActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    minWidth: 80,
+  },
+  openButton: {
+    backgroundColor: '#D1FAE5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  closeButton: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  exportButton: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  actionText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  openText: {
+    color: '#10B981',
+  },
+  closeText: {
+    color: '#EF4444',
+  },
+  exportText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: theme.colors.primary.DEFAULT,
+  },
+  validatedInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#D1FAE5',
+  },
+  validatedText: {
+    fontSize: 12,
+    color: '#10B981',
+  },
+  disabledCard: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  disabledText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+  },
+});

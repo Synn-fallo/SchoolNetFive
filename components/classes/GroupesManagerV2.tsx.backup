@@ -1,0 +1,505 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { Plus, Trash2, Users, RefreshCw, Edit2, UserPlus } from 'lucide-react-native';
+import { Card } from '@/components/Card';
+import { useGroupes, ModeleGroupe } from '@/hooks/useGroupes';
+import { useAcademicStructure } from '@/hooks/useAcademicStructure';
+import GroupeModal from '@/components/classes/GroupeModal';
+import AssignerElevesModal from '@/components/classes/AssignerElevesModal';
+import AssignerEnseignantModal from '@/components/classes/AssignerEnseignantModal';
+import GroupeDetailModal from '@/components/classes/GroupeDetailModal';
+import CreerGroupeModal from '@/components/classes/CreerGroupeModal';
+import GenererGroupesModal from '@/components/classes/GenererGroupesModal';
+import ConfirmationModal from '@/components/common/ConfirmationModal';
+import theme from '@/constants/theme';
+
+interface GroupesManagerV2Props {
+  classeId: string;
+  classeNom?: string;
+  onRefresh?: () => void;
+}
+
+export default function GroupesManagerV2({ classeId, classeNom, onRefresh }: GroupesManagerV2Props) {
+  const { 
+    groupes, 
+    loading, 
+    error, 
+    deleteGroupe, 
+    generateGroupesFromModele, 
+    refresh, 
+    createGroupe, 
+    updateGroupe 
+  } = useGroupes(classeId);
+  const { modelesGroupes, loading: modelesLoading } = useAcademicStructure();
+  
+  const [generating, setGenerating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [isModelesLoading, setIsModelesLoading] = useState(true);
+  
+  // États pour les modals
+  const [showCreerModal, setShowCreerModal] = useState(false);
+  const [showGenererModal, setShowGenererModal] = useState(false);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editingGroupe, setEditingGroupe] = useState<{ id: string; nom: string; description?: string } | null>(null);
+  const [assignElevesModalVisible, setAssignElevesModalVisible] = useState(false);
+  const [selectedGroupeId, setSelectedGroupeId] = useState<string | null>(null);
+  const [selectedGroupeNom, setSelectedGroupeNom] = useState('');
+  const [assignEnseignantModalVisible, setAssignEnseignantModalVisible] = useState(false);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  
+  // États pour confirmation
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [groupeToDelete, setGroupeToDelete] = useState<{ id: string; nom: string } | null>(null);
+
+  // Suivre le chargement des modèles
+  useEffect(() => {
+    if (modelesGroupes) {
+      setIsModelesLoading(false);
+    }
+  }, [modelesGroupes]);
+
+  const handleGenerateFromModele = async (modele: ModeleGroupe) => {
+    setGenerating(true);
+    const result = await generateGroupesFromModele(modele);
+    setGenerating(false);
+    
+    if (result.success) {
+      if (onRefresh) onRefresh();
+    } else {
+      // L'erreur est déjà gérée dans le modal via le résultat
+      console.error('Erreur:', result.error);
+    }
+  };
+
+  const handleDeleteGroupe = (groupeId: string, groupeNom: string) => {
+    setGroupeToDelete({ id: groupeId, nom: groupeNom });
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteGroupe = async () => {
+    if (!groupeToDelete) return;
+    
+    setDeleting(true);
+    const result = await deleteGroupe(groupeToDelete.id);
+    setDeleting(false);
+    
+    if (result.success) {
+      setShowDeleteConfirm(false);
+      setGroupeToDelete(null);
+      if (onRefresh) onRefresh();
+    } else {
+      // L'erreur est déjà gérée dans le hook
+      console.error('Erreur:', result.error);
+    }
+  };
+
+  const handleCreateGroupe = async (nom: string, description?: string) => {
+    const result = await createGroupe(nom, description);
+    if (result.success) {
+      setShowCreerModal(false);
+      if (onRefresh) onRefresh();
+    } else {
+      console.error('Erreur:', result.error);
+    }
+  };
+
+  const handleUpdateGroupe = async (nom: string, description?: string) => {
+    if (!editingGroupe) return;
+    const result = await updateGroupe(editingGroupe.id, { nom, description });
+    if (result.success) {
+      setEditModalVisible(false);
+      setEditingGroupe(null);
+      if (onRefresh) onRefresh();
+    } else {
+      console.error('Erreur:', result.error);
+    }
+  };
+
+  const openEditModal = (groupe: { id: string; nom: string; description?: string }) => {
+    setEditingGroupe(groupe);
+    setEditModalVisible(true);
+  };
+
+  const openAssignElevesModal = (groupeId: string, groupeNom: string) => {
+    setSelectedGroupeId(groupeId);
+    setSelectedGroupeNom(groupeNom);
+    setAssignElevesModalVisible(true);
+  };
+
+  const openAssignEnseignantModal = (groupeId: string, groupeNom: string) => {
+    setSelectedGroupeId(groupeId);
+    setSelectedGroupeNom(groupeNom);
+    setAssignEnseignantModalVisible(true);
+  };
+
+  const openDetailModal = (groupeId: string, groupeNom: string) => {
+    setSelectedGroupeId(groupeId);
+    setSelectedGroupeNom(groupeNom);
+    setDetailModalVisible(true);
+  };
+
+  const handleAssignSuccess = () => {
+    if (onRefresh) onRefresh();
+  };
+
+  const handleOpenGenererModal = () => {
+    // Le modal charge lui-même les données, pas besoin de vérifier ici
+    setShowGenererModal(true);
+  };
+
+  if (loading || modelesLoading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement des groupes...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={refresh}>
+          <Text style={styles.retryButtonText}>Réessayer</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {classeNom && (
+        <View style={styles.header}>
+          <Users size={20} color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.headerTitle}>Groupes de {classeNom}</Text>
+        </View>
+      )}
+
+      {/* Actions principales : deux boutons côte à côte */}
+      <View style={styles.actionsContainer}>
+        <TouchableOpacity style={styles.actionButton} onPress={() => setShowCreerModal(true)}>
+          <Plus size={18} color="#FFFFFF" />
+          <Text style={styles.actionButtonText}>Créer un groupe</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.actionButton, styles.secondaryButton]} 
+          onPress={handleOpenGenererModal}
+        >
+          <RefreshCw size={18} color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.secondaryButtonText}>Générer depuis modèle</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Liste des groupes existants */}
+      <Card style={styles.groupesCard}>
+        <View style={styles.groupesHeader}>
+          <Text style={styles.groupesTitle}>Groupes existants</Text>
+          <Text style={styles.groupesCount}>({groupes.length})</Text>
+        </View>
+        
+        {groupes.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>Aucun groupe</Text>
+            <Text style={styles.emptySubtext}>
+              Créez un groupe manuellement ou générez-le à partir d'un modèle
+            </Text>
+          </View>
+        ) : (
+          groupes.map((groupe) => (
+            <View key={groupe.id} style={styles.groupeItem}>
+              <TouchableOpacity style={styles.groupeInfo} onPress={() => openDetailModal(groupe.id, groupe.nom)}>
+                <View style={styles.groupeBadge}>
+                  <Text style={styles.groupeBadgeText}>{groupe.nom}</Text>
+                </View>
+                <Text style={styles.groupeCount}>
+                  {groupe.eleves_count || 0} élève(s)
+                </Text>
+                {groupe.description && (
+                  <Text style={styles.groupeDescription}>{groupe.description}</Text>
+                )}
+                {groupe.enseignant && (
+                  <Text style={styles.enseignantInfo}>
+                    👨‍🏫 {groupe.enseignant.prenom} {groupe.enseignant.nom} - {groupe.enseignant.matiere_nom}
+                  </Text>
+                )}
+              </TouchableOpacity>
+              <View style={styles.groupeActions}>
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={() => openAssignElevesModal(groupe.id, groupe.nom)}
+                >
+                  <Users size={16} color={theme.colors.primary.DEFAULT} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={() => openAssignEnseignantModal(groupe.id, groupe.nom)}
+                >
+                  <UserPlus size={16} color={theme.colors.primary.DEFAULT} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={() => openEditModal(groupe)}
+                >
+                  <Edit2 size={16} color={theme.colors.neutral[600]} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={() => handleDeleteGroupe(groupe.id, groupe.nom)}
+                >
+                  <Trash2 size={16} color="#EF4444" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))
+        )}
+      </Card>
+
+      {/* Note explicative */}
+      <View style={styles.noteContainer}>
+        <Text style={styles.noteText}>
+          ℹ️ Les groupes permettent de subdiviser une classe pour les cours pratiques (ateliers, TP, etc.).
+        </Text>
+      </View>
+
+      {/* Modals */}
+      <CreerGroupeModal
+        visible={showCreerModal}
+        onClose={() => setShowCreerModal(false)}
+        onCreate={handleCreateGroupe}
+        isLoading={loading}
+      />
+
+      <GenererGroupesModal
+        visible={showGenererModal}
+        onClose={() => setShowGenererModal(false)}
+        onGenerate={handleGenerateFromModele}
+        isLoading={generating}
+      />
+
+      <GroupeModal
+        visible={editModalVisible}
+        onClose={() => {
+          setEditModalVisible(false);
+          setEditingGroupe(null);
+        }}
+        onSave={handleUpdateGroupe}
+        initialNom={editingGroupe?.nom || ''}
+        initialDescription={editingGroupe?.description || ''}
+        title="Modifier le groupe"
+      />
+
+      {selectedGroupeId && (
+        <>
+          <AssignerElevesModal
+            visible={assignElevesModalVisible}
+            onClose={() => setAssignElevesModalVisible(false)}
+            classeId={classeId}
+            groupeId={selectedGroupeId}
+            groupeNom={selectedGroupeNom}
+            onAssign={handleAssignSuccess}
+          />
+          <AssignerEnseignantModal
+            visible={assignEnseignantModalVisible}
+            onClose={() => setAssignEnseignantModalVisible(false)}
+            etablissementId={classeId}
+            groupeId={selectedGroupeId}
+            groupeNom={selectedGroupeNom}
+            onAssign={handleAssignSuccess}
+          />
+          <GroupeDetailModal
+            visible={detailModalVisible}
+            onClose={() => setDetailModalVisible(false)}
+            groupeId={selectedGroupeId}
+            groupeNom={selectedGroupeNom}
+            classeId={classeId}
+          />
+        </>
+      )}
+
+      {/* Modal de confirmation de suppression */}
+      <ConfirmationModal
+        visible={showDeleteConfirm}
+        title="Supprimer le groupe"
+        message={`Êtes-vous sûr de vouloir supprimer le groupe "${groupeToDelete?.nom}" ?\n\nLes élèves ne seront pas supprimés, mais retirés du groupe.`}
+        confirmText="Supprimer"
+        variant="danger"
+        onConfirm={confirmDeleteGroupe}
+        onCancel={() => {
+          setShowDeleteConfirm(false);
+          setGroupeToDelete(null);
+        }}
+      />
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  retryButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  actionsContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  actionButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  secondaryButton: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  secondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.colors.primary.DEFAULT,
+  },
+  groupesCard: {
+    padding: 16,
+    marginBottom: 16,
+  },
+  groupesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  groupesTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  groupesCount: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  groupeItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  groupeInfo: {
+    flex: 1,
+  },
+  groupeBadge: {
+    backgroundColor: '#E5E7EB',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  groupeBadgeText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#374151',
+  },
+  groupeCount: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  groupeDescription: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  enseignantInfo: {
+    fontSize: 11,
+    color: theme.colors.primary.DEFAULT,
+    marginTop: 4,
+  },
+  groupeActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionIcon: {
+    padding: 6,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    marginBottom: 4,
+  },
+  emptySubtext: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    textAlign: 'center',
+  },
+  noteContainer: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  noteText: {
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 18,
+  },
+});

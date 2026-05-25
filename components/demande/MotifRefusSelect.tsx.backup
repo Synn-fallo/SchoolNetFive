@@ -1,0 +1,278 @@
+// /home/project/components/demande/MotifRefusSelect.tsx
+// Composant pour la sélection des motifs de refus
+
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Modal } from 'react-native';
+import { useState } from 'react';
+import { ChevronDown, X } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+export interface MotifRefus {
+  value: string;
+  label: string;
+  requiresPrecision?: boolean;
+}
+
+export const MOTIFS_REFUS: MotifRefus[] = [
+  { value: 'educmaster_invalide', label: 'EducMaster invalide ou non reconnu' },
+  { value: 'documents_manquants', label: 'Documents justificatifs manquants' },
+  { value: 'classe_indisponible', label: 'Classe demandée non disponible' },
+  { value: 'age_non_conforme', label: 'Âge non conforme au niveau demandé' },
+  { value: 'capacite_atteinte', label: 'Effectif maximum de la classe atteint' },
+  { value: 'doublon_etablissement', label: 'Élève déjà inscrit dans cet établissement' },
+  { value: 'irregularite_dossier', label: 'Irrégularité dans le dossier' },
+  { value: 'autre', label: 'Autre motif', requiresPrecision: true },
+];
+
+interface MotifRefusSelectProps {
+  visible: boolean;
+  selectedMotif?: string;
+  motifPrecision?: string;
+  onSelect: (motif: string, precision?: string) => void;
+  onClose: () => void;
+}
+
+export default function MotifRefusSelect({
+  visible,
+  selectedMotif,
+  motifPrecision,
+  onSelect,
+  onClose,
+}: MotifRefusSelectProps) {
+  const [tempMotif, setTempMotif] = useState(selectedMotif || '');
+  const [tempPrecision, setTempPrecision] = useState(motifPrecision || '');
+
+  const handleConfirm = () => {
+    if (!tempMotif) return;
+    
+    const motif = MOTIFS_REFUS.find(m => m.value === tempMotif);
+    let finalMessage = motif?.label || tempMotif;
+    
+    if (motif?.requiresPrecision && tempPrecision.trim()) {
+      finalMessage = `${motif.label}: ${tempPrecision.trim()}`;
+    } else if (motif?.requiresPrecision && !tempPrecision.trim()) {
+      // Si "Autre" est sélectionné sans précision, ne pas valider
+      return;
+    }
+    
+    onSelect(tempMotif, finalMessage);
+    onClose();
+  };
+
+  const handleReset = () => {
+    setTempMotif('');
+    setTempPrecision('');
+  };
+
+  const selectedMotifData = MOTIFS_REFUS.find(m => m.value === tempMotif);
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Motif du refus</Text>
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <X size={20} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.modalBody}>
+            <Text style={styles.label}>Sélectionnez un motif *</Text>
+            
+            {MOTIFS_REFUS.map((motif) => (
+              <TouchableOpacity
+                key={motif.value}
+                style={[
+                  styles.motifOption,
+                  tempMotif === motif.value && styles.motifOptionActive,
+                ]}
+                onPress={() => {
+                  setTempMotif(motif.value);
+                  if (!motif.requiresPrecision) {
+                    setTempPrecision('');
+                  }
+                }}
+              >
+                <Text
+                  style={[
+                    styles.motifOptionText,
+                    tempMotif === motif.value && styles.motifOptionTextActive,
+                  ]}
+                >
+                  {motif.label}
+                </Text>
+                {tempMotif === motif.value && (
+                  <View style={styles.checkMark} />
+                )}
+              </TouchableOpacity>
+            ))}
+
+            {selectedMotifData?.requiresPrecision && (
+              <View style={styles.precisionContainer}>
+                <Text style={styles.label}>Précisez le motif *</Text>
+                <TextInput
+                  style={styles.precisionInput}
+                  placeholder="Ex: Document d'identité manquant, Âge non vérifié..."
+                  value={tempPrecision}
+                  onChangeText={setTempPrecision}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+              </View>
+            )}
+          </View>
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => {
+                handleReset();
+                onClose();
+              }}
+            >
+              <Text style={styles.cancelButtonText}>Annuler</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.confirmButton,
+                (!tempMotif || (selectedMotifData?.requiresPrecision && !tempPrecision.trim())) &&
+                  styles.confirmButtonDisabled,
+              ]}
+              onPress={handleConfirm}
+              disabled={
+                !tempMotif ||
+                (selectedMotifData?.requiresPrecision && !tempPrecision.trim())
+              }
+            >
+              <Text style={styles.confirmButtonText}>Confirmer le refus</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    maxWidth: 400,
+    maxHeight: '80%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    padding: 20,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 12,
+  },
+  motifOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  motifOptionActive: {
+    backgroundColor: '#EFF6FF',
+  },
+  motifOptionText: {
+    fontSize: 14,
+    color: '#4B5563',
+  },
+  motifOptionTextActive: {
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  checkMark: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: theme.colors.primary.DEFAULT,
+  },
+  precisionContainer: {
+    marginTop: 16,
+  },
+  precisionInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#1F2937',
+    backgroundColor: '#FFFFFF',
+    minHeight: 80,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  confirmButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+  },
+  confirmButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  confirmButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

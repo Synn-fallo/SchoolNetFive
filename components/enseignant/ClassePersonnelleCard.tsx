@@ -1,0 +1,200 @@
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { Card } from '@/components/Card';
+import { BookOpen, Users, FileText, Trash2, Edit2, Download, Eye } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+interface ClassePersonnelle {
+  id: string;
+  nom: string;
+  description: string | null;
+  matieres: any[];
+  eleves: any[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface ClassePersonnelleCardProps {
+  classe: ClassePersonnelle;
+  onPress?: () => void; // Nouvelle prop pour ouvrir le modal détail
+  onEdit: () => void;
+  onDelete: () => void;
+  onExport: () => void;
+  onManageEleves: () => void;
+  onManageMatieres: () => void;
+  onViewNotes: () => void;
+}
+
+export default function ClassePersonnelleCard({
+  classe,
+  onPress,
+  onEdit,
+  onDelete,
+  onExport,
+  onManageEleves,
+  onManageMatieres,
+  onViewNotes
+}: ClassePersonnelleCardProps) {
+  const elevesCount = classe.eleves?.length || 0;
+  const matieresCount = classe.matieres?.length || 0;
+
+  const handleDelete = () => {
+    Alert.alert(
+      'Supprimer la classe',
+      `Êtes-vous sûr de vouloir supprimer la classe "${classe.nom}" ?\n\nCette action est irréversible.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Supprimer', style: 'destructive', onPress: onDelete }
+      ]
+    );
+  };
+
+  const handlePress = () => {
+    if (onPress) {
+      onPress();
+    }
+  };
+
+  return (
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.7}>
+      <Card style={styles.card}>
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <BookOpen size={20} color="#8B5CF6" />
+            <Text style={styles.nom}>{classe.nom}</Text>
+          </View>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>Personnel</Text>
+          </View>
+        </View>
+
+        {classe.description && (
+          <Text style={styles.description} numberOfLines={2}>
+            {classe.description}
+          </Text>
+        )}
+
+        <View style={styles.stats}>
+          <View style={styles.stat}>
+            <Users size={14} color="#6B7280" />
+            <Text style={styles.statText}>{elevesCount} élève(s)</Text>
+          </View>
+          <View style={styles.stat}>
+            <FileText size={14} color="#6B7280" />
+            <Text style={styles.statText}>{matieresCount} matière(s)</Text>
+          </View>
+        </View>
+
+        <View style={styles.actions}>
+          <TouchableOpacity style={styles.actionButton} onPress={onManageEleves}>
+            <Users size={14} color={theme.colors.primary.DEFAULT} />
+            <Text style={styles.actionText}>Élèves</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton} onPress={onManageMatieres}>
+            <FileText size={14} color={theme.colors.primary.DEFAULT} />
+            <Text style={styles.actionText}>Matières</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton} onPress={onViewNotes}>
+            <Eye size={14} color={theme.colors.primary.DEFAULT} />
+            <Text style={styles.actionText}>Notes</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton} onPress={onExport}>
+            <Download size={14} color="#10B981" />
+            <Text style={[styles.actionText, { color: '#10B981' }]}>Export</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton} onPress={onEdit}>
+            <Edit2 size={14} color="#F59E0B" />
+            <Text style={[styles.actionText, { color: '#F59E0B' }]}>Modifier</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton} onPress={handleDelete}>
+            <Trash2 size={14} color="#EF4444" />
+            <Text style={[styles.actionText, { color: '#EF4444' }]}>Supprimer</Text>
+          </TouchableOpacity>
+        </View>
+      </Card>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    padding: 16,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#8B5CF6',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  nom: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  badge: {
+    backgroundColor: '#8B5CF6',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  badgeText: {
+    fontSize: 10,
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  description: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 12,
+  },
+  stats: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 16,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  stat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statText: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 6,
+  },
+  actionText: {
+    fontSize: 11,
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+});

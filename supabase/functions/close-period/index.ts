@@ -1,0 +1,138 @@
+// /home/project/supabase/functions/close-period/index.ts
+
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  // 'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'content-type, authorization, apikey, x-client-info, x-application-name',
+};
+
+serve(async (req) => {
+  // Gérer CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
+  try {
+    // Créer un client Supabase avec l'en-tête Authorization
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'Non autorisé - Token manquant' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    // Vérifier l'utilisateur
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError || !user) {
+      console.error('Auth error:', userError);
+      return new Response(
+        JSON.stringify({ error: 'Non autorisé - Utilisateur non trouvé' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Vérifier que l'utilisateur est chef d'établissement
+    const { data: userRoles } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .eq('is_active', true);
+
+    const isChef = userRoles?.some(r => r.role === 'chef_etablissement');
+    if (!isChef) {
+      return new Response(
+        JSON.stringify({ error: 'Seul le chef d\'établissement peut clôturer une période' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Récupérer les paramètres
+    const { periode_id } = await req.json();
+
+    if (!periode_id) {
+      return new Response(
+        JSON.stringify({ error: 'periode_id manquant' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Vérifier que la période existe
+    const { data: periode, error: periodeError } = await supabase
+      .from('periodes')
+      .select('id, libelle, etablissement_id')
+      .eq('id', periode_id)
+      .single();
+
+    if (periodeError || !periode) {
+      return new Response(
+        JSON.stringify({ error: 'Période non trouvée' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Clôturer la période
+    const { error: updateError } = await supabase
+      .from('periodes_validation')
+      .upsert({
+        periode_id,
+        is_open: false,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'periode_id' });
+
+    if (updateError) {
+      console.error('Update error:', updateError);
+      return new Response(
+        JSON.stringify({ error: 'Erreur lors de la clôture' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Notifier les enseignants
+    const { data: enseignants } = await supabase
+      .from('user_roles')
+      .select('user_id')
+      .eq('etablissement_id', periode.etablissement_id)
+      .eq('role', 'enseignant')
+      .eq('is_active', true);
+
+    if (enseignants && enseignants.length > 0) {
+      for (const enseignant of enseignants) {
+        await supabase
+          .from('notifications')
+          .insert({
+            user_id: enseignant.user_id,
+            type: 'period_closed',
+            title: 'Période clôturée',
+            message: `La période "${periode.libelle}" a été clôturée. Les notes ne peuvent plus être modifiées.`,
+            is_read: false,
+          });
+      }
+    }
+
+    return new Response(
+      JSON.stringify({ 
+        success: true, 
+        message: `La période "${periode.libelle}" a été clôturée.` 
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  } catch (error) {
+    console.error('Erreur:', error);
+    return new Response(
+      JSON.stringify({ error: 'Erreur interne du serveur' }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+});

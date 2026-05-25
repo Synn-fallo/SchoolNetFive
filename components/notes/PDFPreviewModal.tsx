@@ -1,0 +1,398 @@
+// /home/project/components/notes/PDFPreviewModal.tsx
+// Modal d'aperçu PDF avec navigation, zoom et export direct
+// Compatible web (iframe) et mobile (WebView)
+
+import { View, Text, StyleSheet, Modal, TouchableOpacity, Platform, ActivityIndicator, Alert } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
+import { X, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, Download } from 'lucide-react-native';
+import { WebView } from 'react-native-webview';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import theme from '@/constants/theme';
+
+interface PDFPreviewModalProps {
+  visible: boolean;
+  onClose: () => void;
+  pdfUri: string | null;
+  pdfFileName?: string;
+  onExport?: () => Promise<void>;
+  isGenerating?: boolean;
+}
+
+export default function PDFPreviewModal({
+  visible,
+  onClose,
+  pdfUri,
+  pdfFileName = 'document.pdf',
+  onExport,
+  isGenerating = false,
+}: PDFPreviewModalProps) {
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      setZoomLevel(1);
+      setCurrentPage(1);
+      setIsLoading(true);
+      setError(null);
+    }
+  }, [visible]);
+
+  const handleZoomIn = () => {
+    setZoomLevel(prev => Math.min(prev + 0.25, 2.5));
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel(prev => Math.max(prev - 0.25, 0.5));
+  };
+
+  const handlePreviousPage = () => {
+    setCurrentPage(prev => Math.max(prev - 1, 1));
+  };
+
+  const handleNextPage = () => {
+    setCurrentPage(prev => Math.min(prev + 1, totalPages));
+  };
+
+  const handleExport = async () => {
+    if (onExport) {
+      await onExport();
+    } else if (pdfUri) {
+      try {
+        if (Platform.OS === 'web') {
+          const link = document.createElement('a');
+          link.href = pdfUri;
+          link.download = pdfFileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          Alert.alert('Succès', 'Téléchargement démarré');
+        } else {
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(pdfUri);
+          } else {
+            Alert.alert('Information', 'Le partage n\'est pas disponible sur cet appareil');
+          }
+        }
+      } catch (err) {
+        console.error('Erreur export:', err);
+        Alert.alert('Erreur', 'Impossible d\'exporter le document');
+      }
+    }
+  };
+
+  const handleLoadEnd = () => {
+    setIsLoading(false);
+  };
+
+  const handleLoadError = () => {
+    setIsLoading(false);
+    setError('Impossible de charger l\'aperçu du PDF');
+  };
+
+  // Rendu pour le web : utiliser iframe
+  const renderWebPreview = () => {
+    if (!pdfUri) return null;
+
+    return (
+      <iframe
+        src={pdfUri}
+        style={{
+          width: '100%',
+          height: '100%',
+          border: 'none',
+          backgroundColor: '#FFFFFF',
+        }}
+        title="Aperçu PDF"
+        onLoad={handleLoadEnd}
+        onError={handleLoadError}
+      />
+    );
+  };
+
+  // Rendu pour le mobile : utiliser WebView
+  const renderMobilePreview = () => {
+    if (!pdfUri) return null;
+
+    // Vérifier si l'URI est une data URL ou une URI de fichier
+    const source = pdfUri.startsWith('data:') 
+      ? { html: `<iframe src="${pdfUri}" style="width:100%;height:100%;border:none;" />` }
+      : { uri: pdfUri };
+
+    return (
+      <WebView
+        source={source}
+        style={styles.webView}
+        onLoad={handleLoadEnd}
+        onError={handleLoadError}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        startInLoadingState={true}
+        renderLoading={() => (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+            <Text style={styles.loadingText}>Chargement du PDF...</Text>
+          </View>
+        )}
+      />
+    );
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <View style={styles.container}>
+        {/* En-tête */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <X size={24} color="#1F2937" />
+            </TouchableOpacity>
+            <Text style={styles.title}>Aperçu du document</Text>
+          </View>
+          <View style={styles.headerRight}>
+            <TouchableOpacity onPress={handleZoomOut} style={styles.zoomButton} disabled={zoomLevel <= 0.5}>
+              <ZoomOut size={20} color={zoomLevel <= 0.5 ? '#9CA3AF' : '#1F2937'} />
+            </TouchableOpacity>
+            <Text style={styles.zoomText}>{Math.round(zoomLevel * 100)}%</Text>
+            <TouchableOpacity onPress={handleZoomIn} style={styles.zoomButton} disabled={zoomLevel >= 2.5}>
+              <ZoomIn size={20} color={zoomLevel >= 2.5 ? '#9CA3AF' : '#1F2937'} />
+            </TouchableOpacity>
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={[styles.exportButton, isGenerating && styles.exportButtonDisabled]}
+              onPress={handleExport}
+              disabled={isGenerating || !pdfUri}
+            >
+              {isGenerating ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Download size={16} color="#FFFFFF" />
+                  <Text style={styles.exportButtonText}>Exporter</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Contenu PDF */}
+        <View style={styles.pdfContainer}>
+          {isLoading && !error && (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+              <Text style={styles.loadingText}>Chargement du document...</Text>
+            </View>
+          )}
+          
+          {error && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={() => window.location.reload()}>
+                <Text style={styles.retryButtonText}>Réessayer</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          
+          {!error && pdfUri && (
+            <View style={[styles.pdfWrapper, { transform: [{ scale: zoomLevel }] }]}>
+              {Platform.OS === 'web' ? renderWebPreview() : renderMobilePreview()}
+            </View>
+          )}
+        </View>
+
+        {/* Pied de page (navigation pages) */}
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.navButton, currentPage <= 1 && styles.navButtonDisabled]}
+            onPress={handlePreviousPage}
+            disabled={currentPage <= 1}
+          >
+            <ChevronLeft size={20} color={currentPage <= 1 ? '#9CA3AF' : '#1F2937'} />
+            <Text style={[styles.navButtonText, currentPage <= 1 && styles.navButtonTextDisabled]}>
+              Précédent
+            </Text>
+          </TouchableOpacity>
+          
+          <Text style={styles.pageInfo}>
+            Page {currentPage} / {totalPages}
+          </Text>
+          
+          <TouchableOpacity
+            style={[styles.navButton, currentPage >= totalPages && styles.navButtonDisabled]}
+            onPress={handleNextPage}
+            disabled={currentPage >= totalPages}
+          >
+            <Text style={[styles.navButtonText, currentPage >= totalPages && styles.navButtonTextDisabled]}>
+              Suivant
+            </Text>
+            <ChevronRight size={20} color={currentPage >= totalPages ? '#9CA3AF' : '#1F2937'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  closeButton: {
+    padding: 4,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  zoomButton: {
+    padding: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  zoomText: {
+    fontSize: 14,
+    color: '#1F2937',
+    minWidth: 45,
+    textAlign: 'center',
+  },
+  divider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#E5E7EB',
+    marginHorizontal: 8,
+  },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  exportButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  exportButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  pdfContainer: {
+    flex: 1,
+    backgroundColor: '#F3F4F6',
+    overflow: 'hidden',
+  },
+  pdfWrapper: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    margin: 16,
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  webView: {
+    flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  retryButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  navButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  navButtonDisabled: {
+    opacity: 0.5,
+  },
+  navButtonText: {
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  navButtonTextDisabled: {
+    color: '#9CA3AF',
+  },
+  pageInfo: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+});

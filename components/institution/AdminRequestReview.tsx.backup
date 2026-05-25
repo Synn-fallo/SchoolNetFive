@@ -1,0 +1,483 @@
+import { View, Text, StyleSheet, ScrollView, Alert, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
+import { useState } from 'react';
+import { Card } from '@/components/Card';
+import { Button } from '@/components/Button';
+import { Input } from '@/components/Input';
+import RequestStatus from './RequestStatus';
+import { supabase } from '@/lib/supabase';
+
+interface AdminRequestReviewProps {
+  request: any;
+  type: 'etablissement' | 'partenariat';
+  onProcessed: () => void;
+  onClose: () => void;
+}
+
+export default function AdminRequestReview({ request, type, onProcessed, onClose }: AdminRequestReviewProps) {
+  const [commentaire, setCommentaire] = useState('');
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'valider' | 'rejeter' | null>(null);
+
+  const showConfirmModal = (action: 'valider' | 'rejeter') => {
+    setPendingAction(action);
+    setConfirmModalVisible(true);
+  };
+
+  const handleConfirm = async () => {
+    if (!pendingAction) return;
+    
+    setConfirmModalVisible(false);
+    setProcessing(true);
+    setError(null);
+    
+    try {
+      console.log(`📤 Appel Edge Function process-institution-request (action: ${pendingAction})`);
+      console.log('Paramètres:', {
+        request_id: request.id,
+        request_type: type,
+        action: pendingAction,
+        commentaire: commentaire || null,
+      });
+      
+      const { data, error } = await supabase.functions.invoke('process-institution-request', {
+        body: {
+          request_id: request.id,
+          request_type: type,
+          action: pendingAction,
+          commentaire: commentaire || null,
+        },
+      });
+      
+      console.log('📥 Réponse - data:', data);
+      console.log('📥 Réponse - error:', error);
+      
+      if (error) {
+        console.error('❌ Erreur Edge Function:', error);
+        throw new Error(error.message || 'Erreur lors de l\'appel');
+      }
+      
+      if (data?.success) {
+        console.log('✅ Succès!');
+        Alert.alert(
+          'Succès',
+          `La demande a été ${pendingAction === 'valider' ? 'validée' : 'rejetée'} avec succès.`,
+          [{ text: 'OK', onPress: onProcessed }]
+        );
+      } else {
+        console.error('❌ Échec:', data?.error);
+        throw new Error(data?.error || 'Erreur lors du traitement');
+      }
+    } catch (err) {
+      console.error('❌ Exception capturée:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Erreur lors du traitement';
+      setError(errorMessage);
+      Alert.alert('Erreur', errorMessage);
+    } finally {
+      setProcessing(false);
+      setPendingAction(null);
+    }
+  };
+
+  const handleTestFunction = async () => {
+    setTestLoading(true);
+    setError(null);
+    
+    try {
+      console.log('🧪 TEST: Appel Edge Function process-institution-request');
+      console.log('Paramètres de test:', {
+        request_id: request.id,
+        request_type: type,
+        action: 'valider',
+        commentaire: 'TEST depuis bouton debug',
+      });
+      
+      const { data, error } = await supabase.functions.invoke('process-institution-request', {
+        body: {
+          request_id: request.id,
+          request_type: type,
+          action: 'valider',
+          commentaire: 'TEST depuis bouton debug',
+        },
+      });
+      
+      console.log('📥 Réponse du test - data:', data);
+      console.log('📥 Réponse du test - error:', error);
+      
+      if (error) {
+        Alert.alert('Échec du test', `Erreur: ${error.message}`);
+      } else if (data?.success) {
+        Alert.alert('Test réussi', 'La fonction a répondu avec succès');
+      } else {
+        Alert.alert('Test échoué', data?.error || 'Réponse inattendue');
+      }
+    } catch (err) {
+      console.error('💥 Exception lors du test:', err);
+      Alert.alert('Erreur', err instanceof Error ? err.message : 'Erreur inconnue');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <Text style={styles.title}>
+          {type === 'etablissement' ? 'Demande d\'établissement' : 'Demande de partenariat'}
+        </Text>
+        <RequestStatus status={request.statut} />
+      </View>
+
+      {/* Message d'erreur */}
+      {error && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
+
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>Informations</Text>
+        {type === 'etablissement' ? (
+          <>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Établissement:</Text>
+              <Text style={styles.value}>{request.nom_etablissement}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Type:</Text>
+              <Text style={styles.value}>{request.type_etablissement === 'public' ? 'Public' : 'Privé'}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Adresse:</Text>
+              <Text style={styles.value}>{request.adresse}, {request.ville}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Téléphone:</Text>
+              <Text style={styles.value}>{request.telephone}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Email:</Text>
+              <Text style={styles.value}>{request.email_contact}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Plan souhaité:</Text>
+              <Text style={styles.value}>{request.plan_souhaite}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Demandeur ID:</Text>
+              <Text style={styles.value}>{request.demandeur_id?.substring(0, 8)}...</Text>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Organisation:</Text>
+              <Text style={styles.value}>{request.organisation_nom}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Type partenaire:</Text>
+              <Text style={styles.value}>{request.type_partenaire}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Contact:</Text>
+              <Text style={styles.value}>{request.contact_nom}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Email:</Text>
+              <Text style={styles.value}>{request.contact_email}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Téléphone:</Text>
+              <Text style={styles.value}>{request.contact_telephone}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Collaboration:</Text>
+              <Text style={styles.value}>{request.type_collaboration}</Text>
+            </View>
+          </>
+        )}
+      </Card>
+
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>Message / Proposition</Text>
+        <Text style={styles.message}>
+          {type === 'etablissement' ? request.message_demandeur : request.proposition || 'Aucun message'}
+        </Text>
+        {type === 'partenariat' && request.montant_propose && (
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Montant proposé:</Text>
+            <Text style={styles.value}>{Number(request.montant_propose).toLocaleString()} FCFA</Text>
+          </View>
+        )}
+      </Card>
+
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>Commentaire admin</Text>
+        <Input
+          placeholder="Ajouter un commentaire (optionnel)"
+          value={commentaire}
+          onChangeText={setCommentaire}
+          multiline
+          numberOfLines={3}
+          textAlignVertical="top"
+        />
+      </Card>
+
+      <View style={styles.buttonContainer}>
+        <Button
+          title="Rejeter"
+          onPress={() => showConfirmModal('rejeter')}
+          variant="danger"
+          loading={processing}
+          disabled={processing}
+        />
+        <Button
+          title="Valider"
+          onPress={() => showConfirmModal('valider')}
+          variant="success"
+          loading={processing}
+          disabled={processing}
+        />
+        <Button title="Fermer" onPress={onClose} variant="secondary" />
+      </View>
+
+      {/* Bouton de test */}
+      <TouchableOpacity
+        style={styles.testButton}
+        onPress={handleTestFunction}
+        disabled={testLoading}
+      >
+        {testLoading ? (
+          <ActivityIndicator size="small" color="#FFFFFF" />
+        ) : (
+          <Text style={styles.testButtonText}>🧪 Tester la fonction (débogage)</Text>
+        )}
+      </TouchableOpacity>
+
+      {/* Section de débogage */}
+      <View style={styles.debugSection}>
+        <Text style={styles.debugTitle}>🔧 Informations de débogage</Text>
+        <Text style={styles.debugText}>ID: {request.id}</Text>
+        <Text style={styles.debugText}>Type: {type}</Text>
+        <Text style={styles.debugText}>Statut: {request.statut}</Text>
+        <Text style={styles.debugText}>Processing: {processing ? 'Oui' : 'Non'}</Text>
+        <Text style={styles.debugText}>Test Loading: {testLoading ? 'Oui' : 'Non'}</Text>
+        <Text style={styles.debugText}>URL Supabase: {supabase?.supabaseUrl || 'Non disponible'}</Text>
+      </View>
+
+      {/* Modal de confirmation personnalisée */}
+      <Modal
+        visible={confirmModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setConfirmModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>
+              {pendingAction === 'valider' ? 'Valider la demande' : 'Rejeter la demande'}
+            </Text>
+            <Text style={styles.modalMessage}>
+              {pendingAction === 'valider' 
+                ? 'Êtes-vous sûr de vouloir valider cette demande ?' 
+                : 'Êtes-vous sûr de vouloir rejeter cette demande ?'}
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonCancel]}
+                onPress={() => setConfirmModalVisible(false)}
+              >
+                <Text style={styles.modalButtonCancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, pendingAction === 'valider' ? styles.modalButtonConfirm : styles.modalButtonDanger]}
+                onPress={handleConfirm}
+              >
+                <Text style={styles.modalButtonConfirmText}>
+                  {pendingAction === 'valider' ? 'Valider' : 'Rejeter'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  section: {
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 16,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  label: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  value: {
+    fontSize: 14,
+    color: '#1F2937',
+    fontWeight: '500',
+    flex: 1,
+    textAlign: 'right',
+  },
+  message: {
+    fontSize: 14,
+    color: '#4B5563',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 24,
+  },
+  errorContainer: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#DC2626',
+    textAlign: 'center',
+  },
+  testButton: {
+    backgroundColor: '#8B5CF6',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  testButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  debugSection: {
+    marginTop: 24,
+    padding: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  debugTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 8,
+  },
+  debugText: {
+    fontSize: 10,
+    color: '#9CA3AF',
+    fontFamily: 'monospace',
+    marginBottom: 2,
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '80%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  modalMessage: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalButtonCancel: {
+    backgroundColor: '#F3F4F6',
+  },
+  modalButtonCancelText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  modalButtonConfirm: {
+    backgroundColor: '#10B981',
+  },
+  modalButtonDanger: {
+    backgroundColor: '#EF4444',
+  },
+  modalButtonConfirmText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

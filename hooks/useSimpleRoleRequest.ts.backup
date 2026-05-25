@@ -1,0 +1,135 @@
+import { useState } from 'react';
+import { useRouter } from 'expo-router';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
+
+interface SimpleRoleFormData {
+  role: 'eleve' | 'parent' | 'enseignant';
+  message?: string;
+  justificatif_url?: string;
+  // Champs spécifiques selon le rôle
+  classe?: string;
+  matricule?: string;
+  enfants?: string;
+  telephone_parent?: string;
+  diplomes?: string;
+  specialite?: string;
+  annees_experience?: string;
+}
+
+interface UseSimpleRoleRequestProps {
+  role: 'eleve' | 'parent' | 'enseignant';
+}
+
+export function useSimpleRoleRequest({ role }: UseSimpleRoleRequestProps) {
+  const { user, profile, refreshProfile } = useAuth();
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submitRequest = async (formData: SimpleRoleFormData) => {
+    if (!user) {
+      setError('Vous devez être connecté pour faire une demande');
+      return false;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Vérifier si l'utilisateur a déjà une demande en attente pour ce rôle
+      const { data: existingRequest, error: checkError } = await supabase
+        .from('demandes_role')
+        .select('id, statut')
+        .eq('user_id', user.id)
+        .eq('role_souhaite', role)
+        .in('statut', ['en_attente', 'valide'])
+        .maybeSingle();
+
+      if (checkError) throw checkError;
+
+      if (existingRequest) {
+        if (existingRequest.statut === 'valide') {
+          setError(`Vous avez déjà le rôle ${role}.`);
+        } else if (existingRequest.statut === 'en_attente') {
+          setError(`Vous avez déjà une demande en attente pour le rôle ${role}.`);
+        }
+        return false;
+      }
+
+      // Construire les données à stocker
+      const requestData: any = {
+        user_id: user.id,
+        role_souhaite: role,
+        message: formData.message || null,
+        justificatif_url: formData.justificatif_url || null,
+        statut: 'valide', // Validation automatique pour la phase minimale
+      };
+
+      // Ajouter les métadonnées spécifiques au rôle
+      let metadata: any = {};
+
+      if (role === 'eleve') {
+        metadata = {
+          classe: formData.classe,
+          matricule: formData.matricule,
+        };
+      } else if (role === 'parent') {
+        metadata = {
+          enfants: formData.enfants,
+          telephone_parent: formData.telephone_parent,
+        };
+      } else if (role === 'enseignant') {
+        metadata = {
+          diplomes: formData.diplomes,
+          specialite: formData.specialite,
+          annees_experience: formData.annees_experience,
+        };
+      }
+
+      requestData.metadata = metadata;
+
+      // Insérer la demande
+      const { error: insertError } = await supabase
+        .from('demandes_role')
+        .insert(requestData);
+
+      if (insertError) throw insertError;
+
+      // Pour la phase minimale, on ajoute directement le rôle dans user_roles
+      const { error: roleError } = await supabase
+        .from('user_roles')
+        .insert({
+          user_id: user.id,
+          role: role,
+          is_active: true,
+          metadata: { source: 'simple_request', requested_at: new Date().toISOString() },
+        });
+
+      if (roleError) throw roleError;
+
+      // Mettre à jour le profil avec le nouveau rôle actif
+      await supabase
+        .from('profiles')
+        .update({ active_role: role })
+        .eq('id', user.id);
+
+      // Rafraîchir le contexte auth
+      await refreshProfile();
+
+      return true;
+    } catch (err) {
+      console.error('Error submitting role request:', err);
+      setError('Une erreur est survenue. Veuillez réessayer.');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return {
+    submitRequest,
+    loading,
+    error,
+  };
+}

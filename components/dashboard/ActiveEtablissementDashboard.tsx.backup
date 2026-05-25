@@ -1,0 +1,234 @@
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Card } from '@/components/Card';
+import { Users, BookOpen, DollarSign, Building2, TrendingUp, Calendar } from 'lucide-react-native';
+import { useActiveEtablissement } from '@/hooks/useActiveEtablissement';
+import theme from '@/constants/theme';
+
+interface Stats {
+  eleves: number;
+  enseignants: number;
+  classes: number;
+  taux_reussite?: number;
+}
+
+export default function ActiveEtablissementDashboard() {
+  const { activeEtablissement, loading: etablissementLoading } = useActiveEtablissement();
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (activeEtablissement) {
+      fetchStats();
+    }
+  }, [activeEtablissement]);
+
+  const fetchStats = async () => {
+    if (!activeEtablissement) return;
+
+    setLoading(true);
+    try {
+      const [elevesCount, enseignantsCount, classesCount] = await Promise.all([
+        supabase.from('eleves').select('*', { count: 'exact', head: true }).eq('etablissement_id', activeEtablissement.id),
+        supabase.from('user_roles').select('*', { count: 'exact', head: true }).eq('etablissement_id', activeEtablissement.id).eq('role', 'enseignant'),
+        supabase.from('classes').select('*', { count: 'exact', head: true }).eq('etablissement_id', activeEtablissement.id),
+      ]);
+
+      setStats({
+        eleves: elevesCount.count || 0,
+        enseignants: enseignantsCount.count || 0,
+        classes: classesCount.count || 0,
+        taux_reussite: 85, // À remplacer par une vraie donnée
+      });
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (etablissementLoading || loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement du tableau de bord...</Text>
+      </View>
+    );
+  }
+
+  if (!activeEtablissement) {
+    return (
+      <View style={styles.centerContainer}>
+        <Building2 size={48} color={theme.colors.neutral[300]} />
+        <Text style={styles.emptyTitle}>Aucun établissement</Text>
+        <Text style={styles.emptyText}>
+          Vous n'êtes pas encore associé à un établissement.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <Text style={styles.title}>{activeEtablissement.nom}</Text>
+        <Text style={styles.subtitle}>Tableau de bord</Text>
+      </View>
+
+      {/* Cartes de statistiques */}
+      <View style={styles.statsGrid}>
+        <Card style={styles.statCard}>
+          <Users size={28} color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.statNumber}>{stats?.eleves || 0}</Text>
+          <Text style={styles.statLabel}>Élèves</Text>
+        </Card>
+        <Card style={styles.statCard}>
+          <BookOpen size={28} color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.statNumber}>{stats?.enseignants || 0}</Text>
+          <Text style={styles.statLabel}>Enseignants</Text>
+        </Card>
+        <Card style={styles.statCard}>
+          <Building2 size={28} color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.statNumber}>{stats?.classes || 0}</Text>
+          <Text style={styles.statLabel}>Classes</Text>
+        </Card>
+        {stats?.taux_reussite && (
+          <Card style={styles.statCard}>
+            <TrendingUp size={28} color={theme.colors.success.DEFAULT} />
+            <Text style={styles.statNumber}>{stats.taux_reussite}%</Text>
+            <Text style={styles.statLabel}>Taux de réussite</Text>
+          </Card>
+        )}
+      </View>
+
+      {/* Section Scolarité & Finance */}
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>💰 Scolarité & Finance</Text>
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>Taux de recouvrement</Text>
+          <Text style={styles.value}>85%</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>Échéancier en cours</Text>
+          <Text style={styles.value}>1er trimestre</Text>
+        </View>
+      </Card>
+
+      {/* Section Prochains événements */}
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>📅 Prochains événements</Text>
+        <View style={styles.infoRow}>
+          <Calendar size={16} color={theme.colors.neutral[500]} />
+          <Text style={styles.eventText}>Conseil de classe - 15/04/2026</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Calendar size={16} color={theme.colors.neutral[500]} />
+          <Text style={styles.eventText}>Réunion parents - 22/04/2026</Text>
+        </View>
+      </Card>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+  header: {
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 20,
+  },
+  statCard: {
+    flex: 1,
+    minWidth: '45%',
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  statNumber: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 8,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  section: {
+    marginBottom: 16,
+    padding: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  label: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  value: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+  },
+  eventText: {
+    fontSize: 13,
+    color: '#4B5563',
+    marginLeft: 8,
+  },
+});

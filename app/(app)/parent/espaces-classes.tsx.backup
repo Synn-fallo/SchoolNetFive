@@ -1,0 +1,350 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
+import { useRouter } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { MessageCircle, ChevronRight, Building2, User } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+export default function ParentEspacesClassesScreen() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [classes, setClasses] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const chargerClasses = useCallback(async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // ÉTAPE 1: Récupérer le parent
+      const { data: parent, error: parentErr } = await supabase
+        .from('parents')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (parentErr) throw parentErr;
+      if (!parent) {
+        setClasses([]);
+        setLoading(false);
+        return;
+      }
+
+      // ÉTAPE 2: Récupérer les liens parent_eleve
+      const { data: liens, error: liensErr } = await supabase
+        .from('parent_eleve')
+        .select('eleve_id')
+        .eq('parent_id', parent.id);
+
+      if (liensErr) throw liensErr;
+      if (!liens || liens.length === 0) {
+        setClasses([]);
+        setLoading(false);
+        return;
+      }
+
+      const eleveIds = liens.map(l => l.eleve_id);
+
+      // ÉTAPE 3: Récupérer les élèves
+      const { data: eleves, error: elevesErr } = await supabase
+        .from('eleves')
+        .select('id, user_id, classe_id, etablissement_id')
+        .in('id', eleveIds);
+
+      if (elevesErr) throw elevesErr;
+      if (!eleves || eleves.length === 0) {
+        setClasses([]);
+        setLoading(false);
+        return;
+      }
+
+      // ÉTAPE 4: Récupérer les profiles (nom, prénom) pour chaque élève
+      const userIds = eleves.map(e => e.user_id).filter(Boolean);
+      let profilesMap: Record<string, { nom: string; prenom: string }> = {};
+
+      if (userIds.length > 0) {
+        const { data: profiles, error: profilesErr } = await supabase
+          .from('profiles')
+          .select('id, nom, prenom')
+          .in('id', userIds);
+
+        if (profilesErr) throw profilesErr;
+
+        if (profiles) {
+          profilesMap = profiles.reduce((acc, p) => {
+            acc[p.id] = { nom: p.nom || '', prenom: p.prenom || '' };
+            return acc;
+          }, {});
+        }
+      }
+
+      // ÉTAPE 5: Récupérer les classes
+      const classeIds = [...new Set(eleves.map(e => e.classe_id).filter(Boolean))];
+      let classesMap: Record<string, { nom: string; etablissement_id: string }> = {};
+
+      if (classeIds.length > 0) {
+        const { data: classesData, error: classesErr } = await supabase
+          .from('classes')
+          .select('id, nom, etablissement_id')
+          .in('id', classeIds);
+
+        if (classesErr) throw classesErr;
+
+        if (classesData) {
+          classesMap = classesData.reduce((acc, c) => {
+            acc[c.id] = { nom: c.nom, etablissement_id: c.etablissement_id };
+            return acc;
+          }, {});
+        }
+      }
+
+      // ÉTAPE 6: Récupérer les établissements
+      const etabIds = [...new Set(eleves.map(e => e.etablissement_id))];
+      let etabsMap: Record<string, { nom: string }> = {};
+
+      if (etabIds.length > 0) {
+        const { data: etabs, error: etabsErr } = await supabase
+          .from('etablissements')
+          .select('id, nom')
+          .in('id', etabIds);
+
+        if (etabsErr) throw etabsErr;
+
+        if (etabs) {
+          etabsMap = etabs.reduce((acc, e) => {
+            acc[e.id] = { nom: e.nom };
+            return acc;
+          }, {});
+        }
+      }
+
+      // ÉTAPE 7: Récupérer les canaux
+      let canauxMap: Record<string, { id: string; mode: string; nom: string }> = {};
+
+      if (classeIds.length > 0) {
+        const { data: canaux, error: canauxErr } = await supabase
+          .from('canaux_classe')
+          .select('id, mode, nom, classe_id')
+          .in('classe_id', classeIds);
+
+        if (canauxErr) throw canauxErr;
+
+        if (canaux) {
+          canauxMap = canaux.reduce((acc, c) => {
+            acc[c.classe_id] = { id: c.id, mode: c.mode, nom: c.nom };
+            return acc;
+          }, {});
+        }
+      }
+
+      // ÉTAPE 8: Assembler les résultats
+      const result = [];
+
+      for (const eleve of eleves) {
+        const profile = profilesMap[eleve.user_id || ''];
+        const classe = classesMap[eleve.classe_id];
+        const etab = etabsMap[eleve.etablissement_id];
+        const canal = canauxMap[eleve.classe_id];
+
+        if (profile && classe && etab) {
+          result.push({
+            id: `${eleve.classe_id}_${eleve.id}`,
+            classe_id: eleve.classe_id,
+            classe_nom: classe.nom,
+            etablissement_id: eleve.etablissement_id,
+            etablissement_nom: etab.nom,
+            enfant_id: eleve.id,
+            enfant_nom: profile.nom,
+            enfant_prenom: profile.prenom,
+            canal_id: canal?.id || null,
+            canal_mode: canal?.mode || null,
+            canal_nom: canal?.nom || null,
+          });
+        }
+      }
+
+      // Trier
+      result.sort((a, b) => {
+        if (a.etablissement_nom !== b.etablissement_nom) {
+          return a.etablissement_nom.localeCompare(b.etablissement_nom);
+        }
+        return a.classe_nom.localeCompare(b.classe_nom);
+      });
+
+      setClasses(result);
+    } catch (err) {
+      console.error('Erreur:', err);
+      setError(err instanceof Error ? err.message : 'Erreur inconnue');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    chargerClasses();
+  }, [chargerClasses]);
+
+  useEffect(() => {
+    chargerClasses();
+  }, [chargerClasses]);
+
+  const handleOpenCanal = (item: any) => {
+    if (!item.canal_id) return;
+    router.push({
+      pathname: '/(app)/parent/canal-classe',
+      params: {
+        canalId: item.canal_id,
+        classeNom: item.classe_nom,
+        enfantId: item.enfant_id,
+        enfantNom: `${item.enfant_prenom} ${item.enfant_nom}`
+      }
+    });
+  };
+
+  const getModeInfo = (mode: string | null) => {
+    switch (mode) {
+      case 'libre': return { icon: '💬', color: '#10B981', label: 'Libre' };
+      case 'moderation': return { icon: '🛡️', color: '#F59E0B', label: 'Modération' };
+      case 'ferme': return { icon: '🔒', color: '#EF4444', label: 'Fermé' };
+      default: return { icon: '❓', color: '#9CA3AF', label: 'Indisponible' };
+    }
+  };
+
+  if (loading && !refreshing) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>Erreur</Text>
+        <Text style={styles.errorSubtext}>{error}</Text>
+        <TouchableOpacity onPress={chargerClasses} style={styles.retryButton}>
+          <Text style={styles.retryButtonText}>Réessayer</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (classes.length === 0) {
+    return (
+      <ScrollView contentContainerStyle={styles.emptyContainer} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+        <MessageCircle size={64} color={theme.colors.neutral[300]} />
+        <Text style={styles.emptyTitle}>Aucun espace classe</Text>
+        <Text style={styles.emptyText}>Aucune classe n'est disponible pour le moment.</Text>
+      </ScrollView>
+    );
+  }
+
+  // Grouper par établissement
+  const grouped = classes.reduce((acc, item) => {
+    if (!acc[item.etablissement_id]) {
+      acc[item.etablissement_id] = { nom: item.etablissement_nom, items: [] };
+    }
+    acc[item.etablissement_id].items.push(item);
+    return acc;
+  }, {} as Record<string, { nom: string; items: any[] }>);
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Espace classes</Text>
+        <Text style={styles.subtitle}>Communication avec les enseignants</Text>
+      </View>
+
+      {Object.values(grouped).map((group) => (
+        <View key={group.nom} style={styles.etabSection}>
+          <View style={styles.etabHeader}>
+            <Building2 size={18} color={theme.colors.primary.DEFAULT} />
+            <Text style={styles.etabNom}>{group.nom}</Text>
+          </View>
+
+          {group.items.map((item) => {
+            const mode = getModeInfo(item.canal_mode);
+            const isActive = item.canal_id && item.canal_mode !== 'ferme';
+
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={[styles.card, !isActive && styles.cardInactive]}
+                onPress={() => handleOpenCanal(item)}
+                disabled={!isActive}
+              >
+                <View style={styles.cardHeader}>
+                  <View>
+                    <View style={styles.enfantRow}>
+                      <User size={14} color={theme.colors.neutral[500]} />
+                      <Text style={styles.enfantNom}>{item.enfant_prenom} {item.enfant_nom}</Text>
+                    </View>
+                    <Text style={styles.classeNom}>{item.classe_nom}</Text>
+                  </View>
+                  <View style={[styles.modeBadge, { backgroundColor: mode.color + '20' }]}>
+                    <Text style={styles.modeIcon}>{mode.icon}</Text>
+                    <Text style={[styles.modeLabel, { color: mode.color }]}>{mode.label}</Text>
+                  </View>
+                </View>
+                <View style={styles.cardFooter}>
+                  {isActive ? (
+                    <>
+                      <Text style={styles.canalNom}>{item.canal_nom || 'Canal de la classe'}</Text>
+                      <ChevronRight size={18} color={theme.colors.primary.DEFAULT} />
+                    </>
+                  ) : (
+                    <Text style={styles.disabledText}>Canal indisponible</Text>
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F9FAFB' },
+  content: { paddingBottom: 32 },
+  header: { paddingHorizontal: 20, paddingVertical: 20, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB', marginBottom: 16 },
+  title: { fontSize: 24, fontWeight: '700', color: '#1F2937', marginBottom: 4 },
+  subtitle: { fontSize: 14, color: '#6B7280' },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  loadingText: { marginTop: 12, fontSize: 14, color: '#6B7280' },
+  errorText: { marginTop: 16, fontSize: 18, fontWeight: '600', color: '#EF4444' },
+  errorSubtext: { marginTop: 8, fontSize: 14, color: '#6B7280', textAlign: 'center' },
+  retryButton: { marginTop: 20, backgroundColor: theme.colors.primary.DEFAULT, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10 },
+  retryButtonText: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, paddingVertical: 60 },
+  emptyTitle: { marginTop: 16, fontSize: 20, fontWeight: '600', color: '#1F2937' },
+  emptyText: { marginTop: 8, fontSize: 14, color: '#6B7280', textAlign: 'center' },
+  etabSection: { marginBottom: 24, paddingHorizontal: 16 },
+  etabHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12, paddingHorizontal: 4 },
+  etabNom: { fontSize: 16, fontWeight: '600', color: theme.colors.primary.DEFAULT },
+  card: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: '#E5E7EB' },
+  cardInactive: { backgroundColor: '#F9FAFB', opacity: 0.7 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  enfantRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  enfantNom: { fontSize: 13, color: '#6B7280' },
+  classeNom: { fontSize: 16, fontWeight: '600', color: '#1F2937' },
+  modeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20 },
+  modeIcon: { fontSize: 12 },
+  modeLabel: { fontSize: 11, fontWeight: '500' },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
+  canalNom: { fontSize: 13, color: theme.colors.primary.DEFAULT, fontWeight: '500' },
+  disabledText: { fontSize: 13, color: '#9CA3AF' },
+});

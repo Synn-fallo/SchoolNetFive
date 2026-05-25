@@ -1,0 +1,127 @@
+// /home/project/app/(app)/enseignant/_layout.tsx
+// Layout spécifique pour l'espace enseignant
+// Isole toutes les routes sous /enseignant
+
+import { Stack } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
+import { ActivityIndicator, View, Text, StyleSheet } from 'react-native';
+import theme from '@/constants/theme';
+
+export default function EnseignantLayout() {
+  const { user, primaryRole, loading } = useAuth();
+
+  // Pendant le chargement, afficher un indicateur
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement de l'espace enseignant...</Text>
+      </View>
+    );
+  }
+
+  // Sécurité : si l'utilisateur n'est pas enseignant, ne pas afficher le layout
+  // (normalement la redirection est déjà faite au niveau parent)
+  if (!user || primaryRole !== 'enseignant') {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>Accès non autorisé</Text>
+        <Text style={styles.errorSubtext}>Vous n'avez pas les droits pour accéder à cet espace.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <Stack
+      screenOptions={{
+        headerStyle: {
+          backgroundColor: '#FFFFFF',
+        },
+        headerTintColor: '#1F2937',
+        headerTitleStyle: {
+          fontWeight: '600',
+        },
+        headerShadowVisible: false,
+        contentStyle: {
+          backgroundColor: '#F9FAFB',
+        },
+      }}
+    >
+      {/* Route principale - Tableau de bord enseignant */}
+      <Stack.Screen
+        name="index"
+        options={{
+          title: 'Tableau de bord',
+          headerShown: true,
+        }}
+      />
+
+      {/* Mes classes */}
+      <Stack.Screen
+        name="mes-classes"
+        options={{
+          title: 'Mes classes',
+          headerShown: true,
+        }}
+      />
+
+      {/* Évaluations & Notes */}
+      <Stack.Screen
+        name="notes"
+        options={{
+          title: 'Évaluations & Notes',
+          headerShown: true,
+        }}
+      />
+
+      {/* Routes à venir (Phase 2, 3, 4) */}
+      {/* 
+      <Stack.Screen
+        name="releves-notes"
+        options={{
+          title: 'Relevés de notes',
+          headerShown: true,
+        }}
+      />
+      <Stack.Screen
+        name="statistiques-classe"
+        options={{
+          title: 'Statistiques de classe',
+          headerShown: true,
+        }}
+      />
+      <Stack.Screen
+        name="appreciations"
+        options={{
+          title: 'Appréciations',
+          headerShown: true,
+        }}
+      />
+      */}
+    </Stack>
+  );
+}
+
+const styles = StyleSheet.create({
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  errorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#EF4444',
+    marginBottom: 8,
+  },
+  errorSubtext: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+});

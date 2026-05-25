@@ -1,0 +1,359 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
+import { useRouter } from 'expo-router';
+import { Calendar, Clock, User, CheckCircle, XCircle, ChevronLeft, Plus } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+interface RendezVous {
+  id: string;
+  enseignant_nom: string;
+  enseignant_prenom: string;
+  date: string;
+  heure: string;
+  motif: string;
+  statut: 'en_attente' | 'confirme' | 'annule';
+  enfant_nom?: string;
+}
+
+// Hook simulé - à connecter à la base de données
+function useRendezVousParent(enfantId?: string) {
+  const [rendezVous, setRendezVous] = useState<RendezVous[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const chargerRendezVous = useCallback(async () => {
+    setLoading(true);
+    // TODO: Implémenter la récupération depuis la table rendez_vous
+    // Pour l'instant, données mockées
+    setTimeout(() => {
+      setRendezVous([
+        {
+          id: '1',
+          enseignant_nom: 'KOFFI',
+          enseignant_prenom: 'Mathieu',
+          date: '2026-05-25',
+          heure: '15:00',
+          motif: 'Suivi des résultats',
+          statut: 'confirme',
+        },
+        {
+          id: '2',
+          enseignant_nom: 'ADJOVI',
+          enseignant_prenom: 'Koffi',
+          date: '2026-05-28',
+          heure: '10:30',
+          motif: 'Discussion sur les progrès',
+          statut: 'en_attente',
+        },
+      ]);
+      setLoading(false);
+    }, 500);
+  }, []);
+
+  const demanderRendezVous = useCallback(async (data: any) => {
+    // TODO: Implémenter la création
+    return { success: true };
+  }, []);
+
+  const annulerRendezVous = useCallback(async (id: string) => {
+    // TODO: Implémenter l'annulation
+    return { success: true };
+  }, []);
+
+  return { rendezVous, loading, refreshing, chargerRendezVous, demanderRendezVous, annulerRendezVous };
+}
+
+export default function ParentRendezVousScreen() {
+  const router = useRouter();
+  const [showForm, setShowForm] = useState(false);
+  const { rendezVous, loading, refreshing, chargerRendezVous, annulerRendezVous } = useRendezVousParent();
+
+  // Charger les rendez-vous au montage du composant
+  useEffect(() => {
+    chargerRendezVous();
+  }, [chargerRendezVous]);
+
+  const onRefresh = useCallback(async () => {
+    await chargerRendezVous();
+  }, [chargerRendezVous]);
+
+  const getStatusBadge = (statut: string) => {
+    switch (statut) {
+      case 'confirme':
+        return { bg: '#D1FAE5', color: '#065F46', label: 'Confirmé', icon: CheckCircle };
+      case 'annule':
+        return { bg: '#FEE2E2', color: '#991B1B', label: 'Annulé', icon: XCircle };
+      default:
+        return { bg: '#FEF3C7', color: '#D97706', label: 'En attente', icon: null };
+    }
+  };
+
+  if (loading && !refreshing) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement des rendez-vous...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <ChevronLeft size={24} color={theme.colors.primary.DEFAULT} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Rendez-vous</Text>
+        <TouchableOpacity onPress={() => setShowForm(true)} style={styles.addButton}>
+          <Plus size={20} color={theme.colors.primary.DEFAULT} />
+        </TouchableOpacity>
+      </View>
+
+      {rendezVous.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Calendar size={48} color={theme.colors.neutral[300]} />
+          <Text style={styles.emptyTitle}>Aucun rendez-vous</Text>
+          <Text style={styles.emptyText}>
+            Vous n'avez pas encore de rendez-vous programmés.
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.listContainer}>
+          {rendezVous.map((rv) => {
+            const status = getStatusBadge(rv.statut);
+            const StatusIcon = status.icon;
+            return (
+              <View key={rv.id} style={styles.rdvCard}>
+                <View style={styles.rdvHeader}>
+                  <View style={styles.rdvEnseignant}>
+                    <User size={16} color={theme.colors.primary.DEFAULT} />
+                    <Text style={styles.rdvEnseignantName}>
+                      {rv.enseignant_prenom} {rv.enseignant_nom}
+                    </Text>
+                  </View>
+                  <View style={[styles.rdvStatus, { backgroundColor: status.bg }]}>
+                    {StatusIcon && <StatusIcon size={12} color={status.color} />}
+                    <Text style={[styles.rdvStatusText, { color: status.color }]}>
+                      {status.label}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.rdvDetails}>
+                  <View style={styles.rdvDetail}>
+                    <Calendar size={14} color="#6B7280" />
+                    <Text style={styles.rdvDetailText}>{rv.date}</Text>
+                  </View>
+                  <View style={styles.rdvDetail}>
+                    <Clock size={14} color="#6B7280" />
+                    <Text style={styles.rdvDetailText}>{rv.heure}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.rdvMotif}>{rv.motif}</Text>
+
+                {rv.statut === 'en_attente' && (
+                  <TouchableOpacity
+                    style={styles.annulerButton}
+                    onPress={() => annulerRendezVous(rv.id)}
+                  >
+                    <Text style={styles.annulerButtonText}>Annuler</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {showForm && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Nouveau rendez-vous</Text>
+            <Text style={styles.modalSubtitle}>À implémenter avec sélection d'enseignant, date, heure et motif</Text>
+            <TouchableOpacity style={styles.closeModalButton} onPress={() => setShowForm(false)}>
+              <Text style={styles.closeModalButtonText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    paddingBottom: 32,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    marginBottom: 16,
+  },
+  backButton: {
+    padding: 8,
+    marginLeft: -8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  addButton: {
+    padding: 8,
+    marginRight: -8,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 32,
+  },
+  emptyTitle: {
+    marginTop: 16,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  emptyText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+  listContainer: {
+    paddingHorizontal: 16,
+  },
+  rdvCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  rdvHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  rdvEnseignant: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rdvEnseignantName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  rdvStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  rdvStatusText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  rdvDetails: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 12,
+  },
+  rdvDetail: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rdvDetailText: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  rdvMotif: {
+    fontSize: 13,
+    color: '#374151',
+    marginBottom: 12,
+  },
+  annulerButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 8,
+  },
+  annulerButtonText: {
+    fontSize: 12,
+    color: '#EF4444',
+    fontWeight: '500',
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    width: '80%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  closeModalButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+  },
+  closeModalButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

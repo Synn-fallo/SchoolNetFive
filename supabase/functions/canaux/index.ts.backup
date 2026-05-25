@@ -1,0 +1,450 @@
+// supabase/functions/canaux/index.ts
+// Edge Function pour la gestion des canaux de communication
+// ⚠️ Déployer avec JWT verification
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'content-type, authorization',
+};
+
+type CanalMode = 'moderation' | 'libre' | 'ferme';
+
+Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
+  try {
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ error: 'Non authentifié' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const token = authHeader.split(' ')[1];
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      {
+        auth: { persistSession: false },
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      }
+    );
+
+    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
+    
+    if (userError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Utilisateur non autorisé' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { persistSession: false } }
+    );
+
+    const { action, canal_id, user_id, mode, message_id } = await req.json();
+
+    // ============================================================
+    // ACTION: CHANGER LE MODE DU CANAL
+    // ============================================================
+    if (action === 'changer_mode') {
+      if (!canal_id || !mode || !['moderation', 'libre', 'ferme'].includes(mode)) {
+        return new Response(
+          JSON.stringify({ error: 'Paramètres invalides: canal_id, mode' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Vérifier que l'utilisateur est l'animateur du canal
+      const { data: canal, error: canalError } = await supabaseAdmin
+        .from('canaux_classe')
+        .select('animateur_id, nom, classe_id')
+        .eq('id', canal_id)
+        .single();
+
+      if (canalError || !canal) {
+        return new Response(
+          JSON.stringify({ error: 'Canal non trouvé' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (canal.animateur_id !== user.id) {
+        return new Response(
+          JSON.stringify({ error: 'Seul l\'animateur peut changer le mode' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Mettre à jour le mode
+      const { error: updateError } = await supabaseAdmin
+        .from('canaux_classe')
+        .update({ mode })
+        .eq('id', canal_id);
+
+      if (updateError) {
+        return new Response(
+          JSON.stringify({ error: updateError.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Récupérer les membres pour notification
+      const { data: membres } = await supabaseAdmin
+        .from('membres_canal')
+        .select('user_id')
+        .eq('canal_id', canal_id)
+        .eq('est_actif', true);
+
+      if (membres && membres.length > 0) {
+        for (const membre of membres) {
+          await supabaseAdmin
+            .from('notifications')
+            .insert({
+              user_id: membre.user_id,
+              titre: `Mode du canal "${canal.nom}" modifié`,
+              contenu: `Le canal est maintenant en mode ${mode === 'libre' ? 'Libre' : mode === 'moderation' ? 'Modération' : 'Fermé'}.`,
+              type: 'CANAL_MODE_CHANGED',
+              data: { canal_id, mode },
+            });
+        }
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, mode }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ============================================================
+    // ACTION: EXCLURE UN MEMBRE
+    // ============================================================
+    if (action === 'exclure_membre') {
+      if (!canal_id || !user_id) {
+        return new Response(
+          JSON.stringify({ error: 'Paramètres invalides: canal_id, user_id' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Vérifier que l'utilisateur est l'animateur
+      const { data: canal, error: canalError } = await supabaseAdmin
+        .from('canaux_classe')
+        .select('animateur_id, nom')
+        .eq('id', canal_id)
+        .single();
+
+      if (canalError || !canal) {
+        return new Response(
+          JSON.stringify({ error: 'Canal non trouvé' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (canal.animateur_id !== user.id) {
+        return new Response(
+          JSON.stringify({ error: 'Seul l\'animateur peut exclure des membres' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Exclure le membre
+      const { error: updateError } = await supabaseAdmin
+        .from('membres_canal')
+        .update({ est_actif: false, peut_ecrire: false })
+        .eq('canal_id', canal_id)
+        .eq('user_id', user_id);
+
+      if (updateError) {
+        return new Response(
+          JSON.stringify({ error: updateError.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Notifier le membre exclu
+      await supabaseAdmin
+        .from('notifications')
+        .insert({
+          user_id: user_id,
+          titre: `Vous avez été exclu du canal "${canal.nom}"`,
+          contenu: `Vous ne pouvez plus envoyer de messages dans ce canal.`,
+          type: 'CANAL_EXCLUSION',
+          data: { canal_id },
+        });
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ============================================================
+    // ACTION: RÉINTÉGRER UN MEMBRE
+    // ============================================================
+    if (action === 'reintegrer_membre') {
+      if (!canal_id || !user_id) {
+        return new Response(
+          JSON.stringify({ error: 'Paramètres invalides: canal_id, user_id' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const { data: canal, error: canalError } = await supabaseAdmin
+        .from('canaux_classe')
+        .select('animateur_id, nom')
+        .eq('id', canal_id)
+        .single();
+
+      if (canalError || !canal) {
+        return new Response(
+          JSON.stringify({ error: 'Canal non trouvé' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (canal.animateur_id !== user.id) {
+        return new Response(
+          JSON.stringify({ error: 'Seul l\'animateur peut réintégrer des membres' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const { error: updateError } = await supabaseAdmin
+        .from('membres_canal')
+        .update({ est_actif: true, peut_ecrire: false })
+        .eq('canal_id', canal_id)
+        .eq('user_id', user_id);
+
+      if (updateError) {
+        return new Response(
+          JSON.stringify({ error: updateError.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ============================================================
+    // ACTION: ÉPINGLER UN MESSAGE
+    // ============================================================
+    if (action === 'pinger_message') {
+      if (!message_id) {
+        return new Response(
+          JSON.stringify({ error: 'Paramètre manquant: message_id' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Récupérer le canal du message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from('messages_canal')
+        .select('canal_id')
+        .eq('id', message_id)
+        .single();
+
+      if (messageError || !message) {
+        return new Response(
+          JSON.stringify({ error: 'Message non trouvé' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Vérifier que l'utilisateur est l'animateur
+      const { data: canal, error: canalError } = await supabaseAdmin
+        .from('canaux_classe')
+        .select('animateur_id')
+        .eq('id', message.canal_id)
+        .single();
+
+      if (canalError || !canal) {
+        return new Response(
+          JSON.stringify({ error: 'Canal non trouvé' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (canal.animateur_id !== user.id) {
+        return new Response(
+          JSON.stringify({ error: 'Seul l\'animateur peut épingler des messages' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Basculer le statut is_pinned
+      const { data: current } = await supabaseAdmin
+        .from('messages_canal')
+        .select('is_pinned')
+        .eq('id', message_id)
+        .single();
+
+      const { error: updateError } = await supabaseAdmin
+        .from('messages_canal')
+        .update({ is_pinned: !current?.is_pinned })
+        .eq('id', message_id);
+
+      if (updateError) {
+        return new Response(
+          JSON.stringify({ error: updateError.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, is_pinned: !current?.is_pinned }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ============================================================
+    // ACTION: CRÉER UN CANAL (auto-création à la création de la classe)
+    // ============================================================
+    if (action === 'creer_canal') {
+      const { classe_id, annee_scolaire_id, animateur_id, nom } = await req.json();
+
+      if (!classe_id || !annee_scolaire_id || !animateur_id || !nom) {
+        return new Response(
+          JSON.stringify({ error: 'Paramètres manquants' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Vérifier que l'utilisateur est admin ou chef
+      const { data: userRole, error: roleError } = await supabaseAdmin
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      const isAdmin = userRole?.role === 'admin' || userRole?.role === 'chef_etablissement';
+
+      if (!isAdmin) {
+        return new Response(
+          JSON.stringify({ error: 'Non autorisé' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Vérifier si un canal existe déjà
+      const { data: existing } = await supabaseAdmin
+        .from('canaux_classe')
+        .select('id')
+        .eq('classe_id', classe_id)
+        .eq('annee_scolaire_id', annee_scolaire_id)
+        .maybeSingle();
+
+      if (existing) {
+        return new Response(
+          JSON.stringify({ error: 'Un canal existe déjà pour cette classe cette année' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const { data: canal, error: canalError } = await supabaseAdmin
+        .from('canaux_classe')
+        .insert({
+          classe_id,
+          annee_scolaire_id,
+          animateur_id,
+          nom,
+          mode: 'moderation',
+        })
+        .select()
+        .single();
+
+      if (canalError) {
+        return new Response(
+          JSON.stringify({ error: canalError.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Ajouter l'animateur comme membre
+      await supabaseAdmin
+        .from('membres_canal')
+        .insert({
+          canal_id: canal.id,
+          user_id: animateur_id,
+          role: 'animateur',
+          peut_ecrire: true,
+          est_actif: true,
+        });
+
+      return new Response(
+        JSON.stringify({ success: true, canal }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ============================================================
+    // ACTION: AJOUTER UN MEMBRE (quand un parent est lié à un élève)
+    // ============================================================
+    if (action === 'ajouter_membre') {
+      const { canal_id, user_id } = await req.json();
+
+      if (!canal_id || !user_id) {
+        return new Response(
+          JSON.stringify({ error: 'Paramètres manquants' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Vérifier si le membre existe déjà
+      const { data: existing } = await supabaseAdmin
+        .from('membres_canal')
+        .select('id')
+        .eq('canal_id', canal_id)
+        .eq('user_id', user_id)
+        .maybeSingle();
+
+      if (existing) {
+        // Réactiver si était inactif
+        await supabaseAdmin
+          .from('membres_canal')
+          .update({ est_actif: true })
+          .eq('canal_id', canal_id)
+          .eq('user_id', user_id);
+      } else {
+        await supabaseAdmin
+          .from('membres_canal')
+          .insert({
+            canal_id,
+            user_id,
+            role: 'membro,
+            peut_ecrire: true,
+            est_actif: true,
+          });
+      }
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ error: 'Action non reconnue' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  } catch (error) {
+    console.error('Erreur:', error);
+    return new Response(
+      JSON.stringify({ error: error.message || 'Erreur interne' }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+});

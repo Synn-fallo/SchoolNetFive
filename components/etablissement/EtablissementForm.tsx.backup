@@ -1,0 +1,676 @@
+import { View, Text, StyleSheet, ScrollView, Alert, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
+import { useState } from 'react';
+import { Input } from '@/components/Input';
+import { Button } from '@/components/Button';
+import { supabase } from '@/lib/supabase';
+import { ChevronDown, Check, X, Info } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+interface EtablissementFormProps {
+  etablissementId: string;
+  initialData?: any;
+  onComplete?: () => void;
+}
+
+// Options pour les champs (choix unique)
+const REGIME_OPTIONS = [
+  { label: 'Public', value: 'public' },
+  { label: 'Privé', value: 'prive' },
+  { label: 'Mixte', value: 'mixte' },
+];
+
+const CORPS_OPTIONS = [
+  { label: 'Collège', value: 'college' },
+  { label: 'Lycée', value: 'lycee' },
+  { label: 'Centre de Métiers', value: 'centre_metiers' },
+];
+
+const ENSEIGNEMENT_OPTIONS = [
+  { label: 'Général', value: 'general' },
+  { label: 'Technique', value: 'technique' },
+];
+
+// Options pour les cycles (choix multiple)
+const CYCLE_OPTIONS = [
+  { label: '1er Cycle (6ème → 3ème)', value: 'premier' },
+  { label: '2nd Cycle (2nde → Terminale)', value: 'second' },
+];
+
+// Options pour les filières (choix multiple)
+const OPTIONS_FILIERES = [
+  { label: 'STI (Sciences et Techniques Industrielles)', value: 'sti', description: 'Formation aux métiers de l\'industrie, de la mécanique, de l\'électricité et de l\'informatique industrielle.' },
+  { label: 'STAG (Sciences et Techniques Administratives et de Gestion)', value: 'stag', description: 'Formation aux métiers de la gestion, de la comptabilité, des ressources humaines et de l\'administration.' },
+  { label: 'Technologie Générale', value: 'technologie', description: 'Formation technologique de base.' },
+  { label: 'Lettres et Sciences Humaines', value: 'lettres', description: 'Formation en littérature, philosophie, histoire et langues.' },
+  { label: 'Sciences Expérimentales', value: 'sciences', description: 'Formation en mathématiques, physique, chimie et SVT.' },
+];
+
+export default function EtablissementForm({ etablissementId, initialData, onComplete }: EtablissementFormProps) {
+  const [loading, setLoading] = useState(false);
+  
+  // États pour les modales
+  const [showRegimeModal, setShowRegimeModal] = useState(false);
+  const [showCorpsModal, setShowCorpsModal] = useState(false);
+  const [showEnseignementModal, setShowEnseignementModal] = useState(false);
+  const [showCyclesModal, setShowCyclesModal] = useState(false);
+  const [showOptionsModal, setShowOptionsModal] = useState(false);
+  const [showInfoModal, setShowInfoModal] = useState(false);
+  const [infoContent, setInfoContent] = useState({ title: '', description: '' });
+  
+  // Valeurs temporaires pour les modales
+  const [tempRegime, setTempRegime] = useState(initialData?.regime || 'public');
+  const [tempCorps, setTempCorps] = useState(initialData?.corps || 'college');
+  const [tempEnseignement, setTempEnseignement] = useState(initialData?.enseignement || 'general');
+  const [tempCycles, setTempCycles] = useState<string[]>(initialData?.cycles || []);
+  const [tempOptions, setTempOptions] = useState<string[]>(initialData?.options || []);
+  
+  // Valeurs finales
+  const [selectedRegime, setSelectedRegime] = useState(initialData?.regime || 'public');
+  const [selectedCorps, setSelectedCorps] = useState(initialData?.corps || 'college');
+  const [selectedEnseignement, setSelectedEnseignement] = useState(initialData?.enseignement || 'general');
+  const [selectedCycles, setSelectedCycles] = useState<string[]>(initialData?.cycles || []);
+  const [selectedOptions, setSelectedOptions] = useState<string[]>(initialData?.options || []);
+  
+  const [formData, setFormData] = useState({
+    description_courte: initialData?.description_courte || '',
+    description: initialData?.description || '',
+    logo_url: initialData?.logo_url || '',
+    taux_reussite: initialData?.taux_reussite || '',
+  });
+
+  const updateField = (field: string, value: string) => {
+    setFormData({ ...formData, [field]: value });
+  };
+
+  // Fonctions pour les modales de choix unique
+  const openRegimeModal = () => {
+    setTempRegime(selectedRegime);
+    setShowRegimeModal(true);
+  };
+  
+  const validateRegime = () => {
+    setSelectedRegime(tempRegime);
+    setShowRegimeModal(false);
+  };
+  
+  const openCorpsModal = () => {
+    setTempCorps(selectedCorps);
+    setShowCorpsModal(true);
+  };
+  
+  const validateCorps = () => {
+    setSelectedCorps(tempCorps);
+    setShowCorpsModal(false);
+  };
+  
+  const openEnseignementModal = () => {
+    setTempEnseignement(selectedEnseignement);
+    setShowEnseignementModal(true);
+  };
+  
+  const validateEnseignement = () => {
+    setSelectedEnseignement(tempEnseignement);
+    setShowEnseignementModal(false);
+  };
+  
+  // Fonctions pour les modales de choix multiple
+  const openCyclesModal = () => {
+    setTempCycles([...selectedCycles]);
+    setShowCyclesModal(true);
+  };
+  
+  const toggleCycle = (cycleValue: string) => {
+    setTempCycles(prev =>
+      prev.includes(cycleValue)
+        ? prev.filter(v => v !== cycleValue)
+        : [...prev, cycleValue]
+    );
+  };
+  
+  const validateCycles = () => {
+    setSelectedCycles(tempCycles);
+    setShowCyclesModal(false);
+  };
+  
+  const openOptionsModal = () => {
+    setTempOptions([...selectedOptions]);
+    setShowOptionsModal(true);
+  };
+  
+  const toggleOption = (optionValue: string) => {
+    setTempOptions(prev =>
+      prev.includes(optionValue)
+        ? prev.filter(v => v !== optionValue)
+        : [...prev, optionValue]
+    );
+  };
+  
+  const validateOptions = () => {
+    setSelectedOptions(tempOptions);
+    setShowOptionsModal(false);
+  };
+  
+  const showOptionInfo = (option: typeof OPTIONS_FILIERES[0]) => {
+    setInfoContent({ title: option.label, description: option.description });
+    setShowInfoModal(true);
+  };
+  
+  const getRegimeLabel = () => {
+    return REGIME_OPTIONS.find(opt => opt.value === selectedRegime)?.label || 'Sélectionner';
+  };
+  
+  const getCorpsLabel = () => {
+    return CORPS_OPTIONS.find(opt => opt.value === selectedCorps)?.label || 'Sélectionner';
+  };
+  
+  const getEnseignementLabel = () => {
+    return ENSEIGNEMENT_OPTIONS.find(opt => opt.value === selectedEnseignement)?.label || 'Sélectionner';
+  };
+  
+  const getCyclesLabels = () => {
+    if (selectedCycles.length === 0) return 'Aucun cycle sélectionné';
+    return selectedCycles.map(v => CYCLE_OPTIONS.find(opt => opt.value === v)?.label || v).join(', ');
+  };
+  
+  const getOptionsLabels = () => {
+    if (selectedOptions.length === 0) return 'Aucune option sélectionnée';
+    return selectedOptions.map(v => OPTIONS_FILIERES.find(opt => opt.value === v)?.label?.split('(')[0].trim() || v).join(', ');
+  };
+
+  const handleSubmit = async () => {
+    setLoading(true);
+    try {
+      const { data: etab, error: fetchError } = await supabase
+        .from('etablissements')
+        .select('metadata')
+        .eq('id', etablissementId)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      const currentMetadata = etab?.metadata || {};
+
+      const updatedMetadata = {
+        ...currentMetadata,
+        description_courte: formData.description_courte,
+        regime: selectedRegime,
+        corps: selectedCorps,
+        enseignement: selectedEnseignement,
+        cycles: selectedCycles,  // ← tableau des cycles sélectionnés
+        options: selectedOptions,
+        taux_reussite: formData.taux_reussite ? parseFloat(formData.taux_reussite) : null,
+      };
+
+      const { error: updateError } = await supabase
+        .from('etablissements')
+        .update({
+          description: formData.description,
+          logo_url: formData.logo_url,
+          metadata: updatedMetadata,
+          statut: 'INFOS_COMPLETES',
+        })
+        .eq('id', etablissementId);
+
+      if (updateError) throw updateError;
+
+      Alert.alert(
+        'Succès',
+        'Les informations de votre établissement ont été enregistrées.',
+        [{ text: 'OK', onPress: () => onComplete && onComplete() }]
+      );
+    } catch (error) {
+      Alert.alert('Erreur', error instanceof Error ? error.message : 'Erreur lors de l\'enregistrement');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <Text style={styles.title}>Informations de l'établissement</Text>
+        <Text style={styles.subtitle}>
+          Complétez ces informations pour rendre votre établissement visible.
+        </Text>
+
+        <Input
+          label="Logo URL"
+          placeholder="https://... (optionnel)"
+          value={formData.logo_url}
+          onChangeText={(v) => updateField('logo_url', v)}
+        />
+
+        <Input
+          label="Description courte"
+          placeholder="Une phrase qui résume votre établissement"
+          value={formData.description_courte}
+          onChangeText={(v) => updateField('description_courte', v)}
+          multiline
+          numberOfLines={2}
+        />
+
+        <Input
+          label="Description complète"
+          placeholder="Présentation détaillée de votre établissement"
+          value={formData.description}
+          onChangeText={(v) => updateField('description', v)}
+          multiline
+          numberOfLines={4}
+          textAlignVertical="top"
+        />
+
+        {/* Régime */}
+        <View style={styles.fieldContainer}>
+          <Text style={styles.fieldLabel}>Régime *</Text>
+          <TouchableOpacity style={styles.selectButton} onPress={openRegimeModal}>
+            <Text style={styles.selectButtonText}>{getRegimeLabel()}</Text>
+            <ChevronDown size={18} color={theme.colors.neutral[500]} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Corps */}
+        <View style={styles.fieldContainer}>
+          <Text style={styles.fieldLabel}>Corps *</Text>
+          <TouchableOpacity style={styles.selectButton} onPress={openCorpsModal}>
+            <Text style={styles.selectButtonText}>{getCorpsLabel()}</Text>
+            <ChevronDown size={18} color={theme.colors.neutral[500]} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Enseignement */}
+        <View style={styles.fieldContainer}>
+          <Text style={styles.fieldLabel}>Enseignement *</Text>
+          <TouchableOpacity style={styles.selectButton} onPress={openEnseignementModal}>
+            <Text style={styles.selectButtonText}>{getEnseignementLabel()}</Text>
+            <ChevronDown size={18} color={theme.colors.neutral[500]} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Cycles (choix multiple) */}
+        <View style={styles.fieldContainer}>
+          <Text style={styles.fieldLabel}>Cycles proposés *</Text>
+          <TouchableOpacity style={styles.selectButton} onPress={openCyclesModal}>
+            <Text style={styles.selectButtonText} numberOfLines={2}>
+              {getCyclesLabels()}
+            </Text>
+            <ChevronDown size={18} color={theme.colors.neutral[500]} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Options proposées (choix multiple) */}
+        <View style={styles.fieldContainer}>
+          <Text style={styles.fieldLabel}>Options proposées</Text>
+          <TouchableOpacity style={styles.selectButton} onPress={openOptionsModal}>
+            <Text style={styles.selectButtonText} numberOfLines={2}>
+              {getOptionsLabels()}
+            </Text>
+            <ChevronDown size={18} color={theme.colors.neutral[500]} />
+          </TouchableOpacity>
+        </View>
+
+        <Input
+          label="Taux de réussite (%)"
+          placeholder="Ex: 85"
+          value={formData.taux_reussite}
+          onChangeText={(v) => updateField('taux_reussite', v)}
+          keyboardType="numeric"
+        />
+
+        <Button
+          title={loading ? "Enregistrement..." : "Enregistrer les informations"}
+          onPress={handleSubmit}
+          loading={loading}
+          disabled={loading}
+          fullWidth
+        />
+      </ScrollView>
+
+      {/* Modal Régime */}
+      <Modal visible={showRegimeModal} transparent={true} animationType="fade" onRequestClose={() => setShowRegimeModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Régime</Text>
+              <TouchableOpacity onPress={() => setShowRegimeModal(false)}><X size={20} color={theme.colors.neutral[600]} /></TouchableOpacity>
+            </View>
+            {REGIME_OPTIONS.map((option) => (
+              <TouchableOpacity key={option.value} style={styles.modalOption} onPress={() => setTempRegime(option.value)}>
+                <View style={[styles.radioCircle, tempRegime === option.value && styles.radioCircleSelected]} />
+                <Text style={styles.modalOptionText}>{option.label}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setShowRegimeModal(false)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalValidateButton} onPress={validateRegime}><Text style={styles.modalValidateText}>Valider</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Corps */}
+      <Modal visible={showCorpsModal} transparent={true} animationType="fade" onRequestClose={() => setShowCorpsModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Corps</Text>
+              <TouchableOpacity onPress={() => setShowCorpsModal(false)}><X size={20} color={theme.colors.neutral[600]} /></TouchableOpacity>
+            </View>
+            {CORPS_OPTIONS.map((option) => (
+              <TouchableOpacity key={option.value} style={styles.modalOption} onPress={() => setTempCorps(option.value)}>
+                <View style={[styles.radioCircle, tempCorps === option.value && styles.radioCircleSelected]} />
+                <Text style={styles.modalOptionText}>{option.label}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setShowCorpsModal(false)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalValidateButton} onPress={validateCorps}><Text style={styles.modalValidateText}>Valider</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Enseignement */}
+      <Modal visible={showEnseignementModal} transparent={true} animationType="fade" onRequestClose={() => setShowEnseignementModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Enseignement</Text>
+              <TouchableOpacity onPress={() => setShowEnseignementModal(false)}><X size={20} color={theme.colors.neutral[600]} /></TouchableOpacity>
+            </View>
+            {ENSEIGNEMENT_OPTIONS.map((option) => (
+              <TouchableOpacity key={option.value} style={styles.modalOption} onPress={() => setTempEnseignement(option.value)}>
+                <View style={[styles.radioCircle, tempEnseignement === option.value && styles.radioCircleSelected]} />
+                <Text style={styles.modalOptionText}>{option.label}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setShowEnseignementModal(false)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalValidateButton} onPress={validateEnseignement}><Text style={styles.modalValidateText}>Valider</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Cycles (choix multiple) */}
+      <Modal visible={showCyclesModal} transparent={true} animationType="slide" onRequestClose={() => setShowCyclesModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentLarge}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Cycles proposés</Text>
+              <TouchableOpacity onPress={() => setShowCyclesModal(false)}><X size={20} color={theme.colors.neutral[600]} /></TouchableOpacity>
+            </View>
+            <ScrollView>
+              {CYCLE_OPTIONS.map((option) => (
+                <TouchableOpacity key={option.value} style={styles.modalOptionCheckbox} onPress={() => toggleCycle(option.value)}>
+                  <View style={[styles.checkbox, tempCycles.includes(option.value) && styles.checkboxSelected]}>
+                    {tempCycles.includes(option.value) && <Check size={12} color="#FFFFFF" />}
+                  </View>
+                  <Text style={styles.modalOptionText}>{option.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setShowCyclesModal(false)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalValidateButton} onPress={validateCycles}><Text style={styles.modalValidateText}>Valider</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Options (choix multiple avec infos) */}
+      <Modal visible={showOptionsModal} transparent={true} animationType="slide" onRequestClose={() => setShowOptionsModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentLarge}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Options proposées</Text>
+              <TouchableOpacity onPress={() => setShowOptionsModal(false)}><X size={20} color={theme.colors.neutral[600]} /></TouchableOpacity>
+            </View>
+            <ScrollView>
+              {OPTIONS_FILIERES.map((option) => (
+                <View key={option.value} style={styles.optionItem}>
+                  <TouchableOpacity style={styles.modalOptionCheckbox} onPress={() => toggleOption(option.value)}>
+                    <View style={[styles.checkbox, tempOptions.includes(option.value) && styles.checkboxSelected]}>
+                      {tempOptions.includes(option.value) && <Check size={12} color="#FFFFFF" />}
+                    </View>
+                    <Text style={styles.modalOptionText}>{option.label}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.infoButton} onPress={() => showOptionInfo(option)}>
+                    <Info size={16} color={theme.colors.primary.DEFAULT} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setShowOptionsModal(false)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalValidateButton} onPress={validateOptions}><Text style={styles.modalValidateText}>Valider</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal d'information */}
+      <Modal visible={showInfoModal} transparent={true} animationType="fade" onRequestClose={() => setShowInfoModal(false)}>
+        <View style={styles.infoModalOverlay}>
+          <View style={styles.infoModalContent}>
+            <View style={styles.infoModalHeader}>
+              <Text style={styles.infoModalTitle}>{infoContent.title}</Text>
+              <TouchableOpacity onPress={() => setShowInfoModal(false)}><X size={18} color={theme.colors.neutral[600]} /></TouchableOpacity>
+            </View>
+            <Text style={styles.infoModalDescription}>{infoContent.description}</Text>
+            <TouchableOpacity style={styles.infoModalButton} onPress={() => setShowInfoModal(false)}>
+              <Text style={styles.infoModalButtonText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  fieldContainer: {
+    marginBottom: 16,
+  },
+  fieldLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  selectButton: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    minHeight: 48,
+  },
+  selectButtonText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '85%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalContentLarge: {
+    width: '90%',
+    maxHeight: '80%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  modalOptionCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  modalOptionText: {
+    fontSize: 14,
+    color: '#1F2937',
+    flex: 1,
+  },
+  radioCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+  },
+  radioCircleSelected: {
+    borderColor: '#3B82F6',
+    backgroundColor: '#3B82F6',
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#3B82F6',
+    borderColor: '#3B82F6',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  modalCancelButton: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  modalCancelText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  modalValidateButton: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#3B82F6',
+    borderRadius: 8,
+  },
+  modalValidateText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  optionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingRight: 16,
+  },
+  infoButton: {
+    padding: 8,
+  },
+  infoModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  infoModalContent: {
+    width: '85%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+  },
+  infoModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  infoModalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    flex: 1,
+  },
+  infoModalDescription: {
+    fontSize: 14,
+    color: '#6B7280',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  infoModalButton: {
+    backgroundColor: '#3B82F6',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  infoModalButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+});

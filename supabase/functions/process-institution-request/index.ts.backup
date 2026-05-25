@@ -1,0 +1,501 @@
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
+};
+
+interface ProcessRequest {
+  request_id: string;
+  request_type: 'etablissement' | 'partenariat';
+  action: 'valider' | 'rejeter' | 'changement_direction';
+  commentaire?: string;
+}
+
+// Fonction pour générer un slug à partir d'un nom
+function generateSlug(nom: string): string {
+  return nom
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+// Fonction pour obtenir un slug unique
+async function getUniqueSlug(supabaseAdmin: any, baseSlug: string): Promise<string> {
+  let slug = baseSlug;
+  let counter = 1;
+  
+  while (true) {
+    const { data, error } = await supabaseAdmin
+      .from('etablissements')
+      .select('slug')
+      .eq('slug', slug)
+      .maybeSingle();
+    
+    if (error || !data) {
+      return slug;
+    }
+    
+    slug = `${baseSlug}-${counter}`;
+    counter++;
+  }
+}
+
+// Fonction de validation automatique par numéro d'agrément
+async function validateByAgrement(supabaseAdmin: any, numeroAgrement: string): Promise<boolean> {
+  // Simuler une vérification automatique
+  // En production, cela appellerait une API externe ou une base de données d'agréments
+  // Pour le MVP, on accepte tout numéro qui commence par "AGRE-" ou "2024-"
+  if (!numeroAgrement) return false;
+  
+  // Règles simples pour le test
+  const isValid = numeroAgrement.startsWith('AGRE-') || 
+                  numeroAgrement.startsWith('2024-') ||
+                  /^[A-Z0-9]{6,}$/.test(numeroAgrement);
+  
+  console.log(`Validation agrément ${numeroAgrement}: ${isValid}`);
+  return isValid;
+}
+
+// Fonction pour gérer le changement de direction
+async function handleChangementDirection(
+  supabaseAdmin: any,
+  etablissementExistant: any,
+  nouveauDemandeurId: string,
+  commentaire: string,
+  requestId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    // 1. Récupérer l'ancien chef d'établissement
+    const { data: existingChef, error: chefError } = await supabaseAdmin
+      .from('user_roles')
+      .select('user_id, id')
+      .eq('etablissement_id', etablissementExistant.id)
+      .eq('role', 'chef_etablissement')
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (chefError) throw chefError;
+
+    // 2. Archiver l'ancien chef
+    if (existingChef) {
+      const { error: archiveError } = await supabaseAdmin
+        .from('user_roles')
+        .update({ 
+          is_active: false,
+          metadata: { 
+            ...(etablissementExistant.user_roles?.metadata || {}),
+            archived_at: new Date().toISOString(),
+            archived_by: nouveauDemandeurId,
+            reason: commentaire || 'Changement de direction',
+            transferred_to: nouveauDemandeurId
+          }
+        })
+        .eq('id', existingChef.id);
+
+      if (archiveError) throw archiveError;
+      console.log(`📦 Ancien chef archivé: ${existingChef.user_id}`);
+    }
+
+    // 3. Créer le nouveau rôle pour le demandeur
+    const { error: roleError } = await supabaseAdmin
+      .from('user_roles')
+      .insert({
+        user_id: nouveauDemandeurId,
+        etablissement_id: etablissementExistant.id,
+        role: 'chef_etablissement',
+        is_active: true,
+        metadata: {
+          transferred_from: existingChef?.user_id || null,
+          transferred_at: new Date().toISOString(),
+          transfer_request_id: requestId
+        }
+      });
+
+    if (roleError) throw roleError;
+    console.log(`👨‍💼 Nouveau chef créé: ${nouveauDemandeurId}`);
+
+    // 4. Mettre à jour le profil du nouveau chef
+    await supabaseAdmin
+      .from('profiles')
+      .update({ etablissement_id: etablissementExistant.id })
+      .eq('id', nouveauDemandeurId);
+
+    // 5. Mettre à jour la demande comme traitée
+    await supabaseAdmin
+      .from('demandes_etablissement')
+      .update({
+        statut: 'valide',
+        commentaire_admin: commentaire || 'Changement de direction accepté',
+        traitee_at: new Date().toISOString(),
+        traitee_par: null,
+        etablissement_cree_id: etablissementExistant.id,
+      })
+      .eq('id', requestId);
+
+    // 6. Envoyer une notification à l'ancien chef
+    if (existingChef) {
+      try {
+        const { data: oldChefProfile } = await supabaseAdmin
+          .from('profiles')
+          .select('email')
+          .eq('id', existingChef.user_id)
+          .single();
+
+        await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/notify-institution-request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: existingChef.user_id,
+            email: oldChefProfile?.email,
+            type: 'changement_direction',
+            message: `Un nouveau chef d'établissement a été nommé pour ${etablissementExistant.nom}. Votre compte a été archivé.`,
+            etablissement_nom: etablissementExistant.nom,
+          }),
+        });
+      } catch (notifyError) {
+        console.error('Error notifying old chef:', notifyError);
+      }
+    }
+
+    // 7. Envoyer une notification au nouveau chef
+    try {
+      await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/notify-institution-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: nouveauDemandeurId,
+          type: 'changement_direction_confirmation',
+          message: `Vous êtes désormais chef d'établissement pour ${etablissementExistant.nom}.`,
+          etablissement_nom: etablissementExistant.nom,
+        }),
+      });
+    } catch (notifyError) {
+      console.error('Error notifying new chef:', notifyError);
+    }
+
+    return { success: true, message: 'Changement de direction effectué avec succès' };
+  } catch (error) {
+    console.error('Error handling direction change:', error);
+    return { success: false, message: error instanceof Error ? error.message : 'Erreur inconnue' };
+  }
+}
+
+Deno.serve(async (req: Request) => {
+  // Gestion CORS
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
+
+  try {
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+    );
+
+    console.log('🔧 Function called - bypassing auth check');
+
+    const { request_id, request_type, action, commentaire }: ProcessRequest = await req.json();
+
+    if (!request_id || !request_type || !action) {
+      throw new Error('Missing required fields: request_id, request_type, action');
+    }
+
+    console.log(`📝 Processing ${request_type} request ${request_id} with action ${action}`);
+
+    let requestData: any;
+    let demandeurId: string;
+
+    if (request_type === 'etablissement') {
+      const { data, error } = await supabaseAdmin
+        .from('demandes_etablissement')
+        .select('*')
+        .eq('id', request_id)
+        .single();
+
+      if (error || !data) {
+        throw new Error(`Etablissement request not found: ${error?.message || 'No data'}`);
+      }
+
+      requestData = data;
+      demandeurId = data.demandeur_id;
+
+      if (action === 'valider') {
+        // Vérifier que l'email n'est pas déjà utilisé
+        const { data: existingEtab, error: emailError } = await supabaseAdmin
+          .from('etablissements')
+          .select('*')
+          .eq('email', data.email_contact)
+          .eq('statut', 'ACTIF')
+          .maybeSingle();
+
+        if (emailError) throw new Error(`Email verification failed: ${emailError.message}`);
+        
+        // Si l'établissement existe déjà, vérifier si c'est un cas de changement de direction
+        if (existingEtab) {
+          const { data: existingChef, error: chefError } = await supabaseAdmin
+            .from('user_roles')
+            .select('user_id, profiles:user_id(email)')
+            .eq('etablissement_id', existingEtab.id)
+            .eq('role', 'chef_etablissement')
+            .eq('is_active', true)
+            .maybeSingle();
+
+          if (chefError) throw chefError;
+
+          if (existingChef) {
+            // Proposer le changement de direction via la réponse
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: 'ETABLISSEMENT_EXISTANT',
+                message: 'Cet email est déjà utilisé par un établissement actif. Voulez-vous demander le changement de direction ?',
+                etablissement: {
+                  id: existingEtab.id,
+                  nom: existingEtab.nom,
+                  chef_actuel: existingChef.profiles?.email,
+                },
+              }),
+              { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+
+        // Vérification automatique si mode = 'auto'
+        let validationAuto = false;
+        let validationMessage = '';
+        
+        if (data.mode_verification === 'auto' && data.numero_agrement) {
+          validationAuto = await validateByAgrement(supabaseAdmin, data.numero_agrement);
+          if (validationAuto) {
+            validationMessage = 'Validé automatiquement (agrément vérifié)';
+            console.log(`✅ Auto-validation réussie pour ${data.nom_etablissement}`);
+          } else {
+            throw new Error('Numéro d\'agrément invalide. Veuillez vérifier ou choisir un autre mode de vérification.');
+          }
+        }
+
+        // Génération du slug unique
+        const baseSlug = generateSlug(data.nom_etablissement);
+        const uniqueSlug = await getUniqueSlug(supabaseAdmin, baseSlug);
+        console.log(`📌 Generated unique slug: ${uniqueSlug}`);
+
+        // Création de l'établissement avec statut EN_ATTENTE_ACTIVATION
+        const { data: etablissement, error: etabError } = await supabaseAdmin
+          .from('etablissements')
+          .insert({
+            nom: data.nom_etablissement,
+            slug: uniqueSlug,
+            type_etablissement: data.type_etablissement,
+            adresse: data.adresse,
+            telephone: data.telephone,
+            email: data.email_contact,
+            ville: data.ville,
+            site_web: data.site_web || null,
+            statut: 'EN_ATTENTE_ACTIVATION',
+            is_active: false,
+            metadata: {
+              plan_souhaite: data.plan_souhaite,
+              message_demandeur: data.message_demandeur,
+              justificatifs_urls: data.justificatifs_urls || [],
+              mode_verification: data.mode_verification,
+              numero_agrement: data.numero_agrement,
+              validation_auto: validationAuto,
+              validation_message: validationMessage,
+            }
+          })
+          .select()
+          .single();
+
+        if (etabError) throw new Error(`Failed to create establishment: ${etabError.message}`);
+
+        console.log(`🏫 Establishment created: ${etablissement.id} with slug ${uniqueSlug}`);
+
+        // Attribution du rôle chef_etablissement
+        const { error: roleInsertError } = await supabaseAdmin
+          .from('user_roles')
+          .insert({
+            user_id: demandeurId,
+            etablissement_id: etablissement.id,
+            role: 'chef_etablissement',
+            is_active: true
+          });
+
+        if (roleInsertError) {
+          await supabaseAdmin.from('etablissements').delete().eq('id', etablissement.id);
+          throw new Error(`Failed to assign role: ${roleInsertError.message}`);
+        }
+
+        // Mise à jour du profil
+        await supabaseAdmin
+          .from('profiles')
+          .update({ etablissement_id: etablissement.id })
+          .eq('id', demandeurId);
+
+        // Mise à jour de la demande
+        await supabaseAdmin
+          .from('demandes_etablissement')
+          .update({
+            statut: 'valide',
+            commentaire_admin: commentaire || validationMessage,
+            traitee_at: new Date().toISOString(),
+            traitee_par: null,
+            etablissement_cree_id: etablissement.id,
+          })
+          .eq('id', request_id);
+
+        console.log(`✅ Establishment request validated, role assigned to ${demandeurId}`);
+      } else if (action === 'changement_direction') {
+        // Gérer le changement de direction
+        // Récupérer l'établissement existant à partir de l'email
+        const { data: existingEtab, error: etabError } = await supabaseAdmin
+          .from('etablissements')
+          .select('*')
+          .eq('email', requestData.email_contact)
+          .eq('statut', 'ACTIF')
+          .maybeSingle();
+
+        if (etabError || !existingEtab) {
+          throw new Error('Établissement non trouvé pour le changement de direction');
+        }
+
+        const result = await handleChangementDirection(
+          supabaseAdmin,
+          existingEtab,
+          demandeurId,
+          commentaire || 'Changement de direction',
+          request_id
+        );
+
+        if (!result.success) {
+          throw new Error(result.message);
+        }
+
+        console.log(`✅ Direction changed for establishment ${existingEtab.id} to user ${demandeurId}`);
+      } else {
+        await supabaseAdmin
+          .from('demandes_etablissement')
+          .update({
+            statut: 'rejete',
+            commentaire_admin: commentaire,
+            traitee_at: new Date().toISOString(),
+            traitee_par: null,
+          })
+          .eq('id', request_id);
+        
+        console.log(`❌ Establishment request rejected`);
+      }
+    } else if (request_type === 'partenariat') {
+      // Partenariat reste inchangé
+      const { data, error } = await supabaseAdmin
+        .from('demandes_partenariat')
+        .select('*')
+        .eq('id', request_id)
+        .single();
+
+      if (error || !data) {
+        throw new Error(`Partnership request not found: ${error?.message || 'No data'}`);
+      }
+
+      requestData = data;
+      demandeurId = data.demandeur_id;
+
+      if (action === 'valider') {
+        const { error: roleInsertError } = await supabaseAdmin
+          .from('user_roles')
+          .insert({
+            user_id: demandeurId,
+            role: 'partenaire',
+            is_active: true
+          });
+
+        if (roleInsertError) throw new Error(`Failed to assign partner role: ${roleInsertError.message}`);
+
+        await supabaseAdmin
+          .from('demandes_partenariat')
+          .update({
+            statut: 'valide',
+            notes_internes: commentaire,
+            traitee_at: new Date().toISOString(),
+            traitee_par: null,
+          })
+          .eq('id', request_id);
+        
+        console.log(`✅ Partnership request validated`);
+      } else {
+        await supabaseAdmin
+          .from('demandes_partenariat')
+          .update({
+            statut: 'rejete',
+            notes_internes: commentaire,
+            traitee_at: new Date().toISOString(),
+            traitee_par: null,
+          })
+          .eq('id', request_id);
+        
+        console.log(`❌ Partnership request rejected`);
+      }
+    } else {
+      throw new Error('Invalid request_type');
+    }
+
+    // Envoi de la notification
+    try {
+      const notificationUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/notify-institution-request`;
+      await fetch(notificationUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_ANON_KEY')}`,
+        },
+        body: JSON.stringify({
+          user_id: demandeurId,
+          request_type,
+          request_id,
+          action,
+          commentaire,
+          validation_auto: request_type === 'etablissement' && action === 'valider' && requestData?.mode_verification === 'auto',
+        }),
+      });
+    } catch (notifyError) {
+      console.error('Error sending notification:', notifyError);
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: `Request ${action} successfully`,
+        request_id,
+        request_type,
+      }),
+      {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (error) {
+    console.error('Error:', error);
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error.message,
+      }),
+      {
+        status: 400,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  }
+});

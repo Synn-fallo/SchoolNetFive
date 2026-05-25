@@ -1,0 +1,332 @@
+import { View, Text, StyleSheet, Modal, TextInput, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
+import { useState, useEffect } from 'react';
+import { X, Save, Calendar } from 'lucide-react-native';
+import { supabase } from '@/lib/supabase';
+import theme from '@/constants/theme';
+
+interface EditClasseModalProps {
+  visible: boolean;
+  onClose: () => void;
+  classeId: string;
+  classeNom: string;
+  classeNiveau: string;
+  classeCapacite?: number;
+  anneeScolaireId?: string;
+  onSave: () => void;
+}
+
+interface AnneeScolaire {
+  id: string;
+  libelle: string;
+  is_active: boolean;
+}
+
+export default function EditClasseModal({
+  visible,
+  onClose,
+  classeId,
+  classeNom,
+  classeNiveau,
+  classeCapacite,
+  anneeScolaireId,
+  onSave,
+}: EditClasseModalProps) {
+  const [nom, setNom] = useState(classeNom);
+  const [capacite, setCapacite] = useState(classeCapacite?.toString() || '');
+  const [anneeScolaireIdState, setAnneeScolaireIdState] = useState(anneeScolaireId || '');
+  const [anneesScolaires, setAnneesScolaires] = useState<AnneeScolaire[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingAnnees, setLoadingAnnees] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      setNom(classeNom);
+      setCapacite(classeCapacite?.toString() || '');
+      setAnneeScolaireIdState(anneeScolaireId || '');
+      loadAnneesScolaires();
+    }
+  }, [visible, classeNom, classeCapacite, anneeScolaireId]);
+
+  const loadAnneesScolaires = async () => {
+    setLoadingAnnees(true);
+    try {
+      const { data, error } = await supabase
+        .from('annees_scolaires')
+        .select('id, libelle, is_active')
+        .order('libelle', { ascending: false });
+
+      if (error) throw error;
+      setAnneesScolaires(data || []);
+    } catch (error) {
+      console.error('Error loading annees scolaires:', error);
+    } finally {
+      setLoadingAnnees(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!nom.trim()) {
+      setError('Le nom de la classe est obligatoire');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const updateData: any = {
+        nom: nom.trim(),
+        capacite: capacite ? parseInt(capacite) : null,
+      };
+
+      if (anneeScolaireIdState) {
+        updateData.annee_scolaire_id = anneeScolaireIdState;
+      }
+
+      const { error } = await supabase
+        .from('classes')
+        .update(updateData)
+        .eq('id', classeId);
+
+      if (error) throw error;
+
+      onSave();
+      onClose();
+    } catch (error) {
+      console.error('Error updating class:', error);
+      setError('Impossible de modifier la classe');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent={true} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Modifier la classe</Text>
+            <TouchableOpacity onPress={onClose}>
+              <X size={20} color={theme.colors.neutral[600]} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalBody}>
+            <Text style={styles.inputLabel}>Nom de la classe *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ex: Tle Technique F1/1"
+              value={nom}
+              onChangeText={setNom}
+            />
+
+            <Text style={styles.inputLabel}>Niveau</Text>
+            <TextInput
+              style={[styles.input, styles.disabledInput]}
+              value={classeNiveau}
+              editable={false}
+            />
+
+            <Text style={styles.inputLabel}>Capacité (optionnel)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Nombre d'élèves"
+              value={capacite}
+              onChangeText={setCapacite}
+              keyboardType="numeric"
+            />
+
+            <Text style={styles.inputLabel}>Année scolaire</Text>
+            {loadingAnnees ? (
+              <ActivityIndicator size="small" color={theme.colors.primary.DEFAULT} />
+            ) : (
+              <View style={styles.selectContainer}>
+                {anneesScolaires.map((annee) => (
+                  <TouchableOpacity
+                    key={annee.id}
+                    style={[
+                      styles.selectOption,
+                      anneeScolaireIdState === annee.id && styles.selectOptionActive,
+                    ]}
+                    onPress={() => setAnneeScolaireIdState(annee.id)}
+                  >
+                    <Calendar size={16} color={anneeScolaireIdState === annee.id ? theme.colors.primary.DEFAULT : '#6B7280'} />
+                    <Text style={[
+                      styles.selectOptionText,
+                      anneeScolaireIdState === annee.id && styles.selectOptionTextActive,
+                    ]}>
+                      {annee.libelle}
+                    </Text>
+                    {annee.is_active && (
+                      <View style={styles.activeBadge}>
+                        <Text style={styles.activeBadgeText}>Active</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {error && <Text style={styles.errorText}>{error}</Text>}
+          </ScrollView>
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+              <Text style={styles.cancelButtonText}>Annuler</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.saveButton, loading && styles.saveButtonDisabled]}
+              onPress={handleSave}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Save size={16} color="#FFFFFF" />
+                  <Text style={styles.saveButtonText}>Enregistrer</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    maxHeight: '80%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  modalBody: {
+    padding: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#1F2937',
+    marginBottom: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  disabledInput: {
+    backgroundColor: '#F3F4F6',
+    color: '#9CA3AF',
+  },
+  selectContainer: {
+    gap: 8,
+    marginBottom: 16,
+  },
+  selectOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  selectOptionActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  selectOptionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  selectOptionTextActive: {
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  activeBadge: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  activeBadgeText: {
+    fontSize: 10,
+    color: '#10B981',
+    fontWeight: '500',
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#EF4444',
+    marginBottom: 8,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  saveButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    borderRadius: 10,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  saveButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

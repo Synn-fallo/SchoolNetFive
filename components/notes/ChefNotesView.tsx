@@ -1,0 +1,653 @@
+// /home/project/components/notes/ChefNotesView.tsx
+// Vue principale pour le chef d'établissement – Gestion des notes
+// Version corrigée avec selectedPeriodeId et selectedPeriodeLabel
+
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { ChevronDown } from 'lucide-react-native';
+import { useChefNotes } from '@/hooks/useChefNotes';
+import { usePeriodValidation } from '@/hooks/usePeriodValidation';
+import { useNotesExport } from '@/hooks/useNotesExport';
+import { useSubscriptionCheck } from '@/hooks/useSubscriptionCheck';
+import { supabase } from '@/lib/supabase';
+import { Periode, Regime, AnneeScolaire } from '@/types/notes.types';
+import { ExportOptions } from '@/types/export.types';
+import PeriodSelector from './PeriodSelector';
+import RechercheBar from './RechercheBar';
+import SyntheseTab from './SyntheseTab';
+import GraphiquesTab from './GraphiquesTab';
+import ElevesTab from './ElevesTab';
+import MatiereTab from './MatiereTab';
+import PilotageTab from './PilotageTab';
+import ClassFilterModal from './ClassFilterModal';
+import MatiereFilterModal from './MatiereFilterModal';
+import theme from '@/constants/theme';
+
+// Définition des 5 onglets
+const TABS = [
+  { id: 'synthese', label: '📊 Synthèse' },
+  { id: 'graphiques', label: '📈 Graphiques' },
+  { id: 'eleves', label: '👨‍🎓 Élèves' },
+  { id: 'matieres', label: '📚 Matières' },
+  { id: 'pilotage', label: '⚙️ Pilotage' },
+];
+
+export default function ChefNotesView({ etablissementId, etablissementNom }: { etablissementId: string; etablissementNom: string }) {
+  // ============================================================
+  // TOUS LES useState (en premier)
+  // ============================================================
+  const [activeTab, setActiveTab] = useState<'synthese' | 'graphiques' | 'eleves' | 'matieres' | 'pilotage'>('synthese');
+  const [selectedClasseId, setSelectedClasseId] = useState<string | null>(null);
+  const [selectedClasseNom, setSelectedClasseNom] = useState<string>('');
+  const [selectedMatiereId, setSelectedMatiereId] = useState<string | null>(null);
+  const [selectedMatiereNom, setSelectedMatiereNom] = useState<string>('');
+  const [selectedPeriodeId, setSelectedPeriodeId] = useState<string>('');
+  const [selectedPeriodeLabel, setSelectedPeriodeLabel] = useState<string>('');
+  const [selectedAnneeScolaireId, setSelectedAnneeScolaireId] = useState<string>('');
+  const [regime, setRegime] = useState<Regime>('semestre');
+  const [anneesScolaires, setAnneesScolaires] = useState<AnneeScolaire[]>([]);
+  const [classes, setClasses] = useState<{ id: string; nom: string }[]>([]);
+  const [matieres, setMatieres] = useState<{ id: string; nom: string }[]>([]);
+  const [periodes, setPeriodes] = useState<{ id: string; libelle: string; ordre: number }[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  // États pour les modals de filtres
+  const [showClassModal, setShowClassModal] = useState(false);
+  const [showMatiereModal, setShowMatiereModal] = useState(false);
+
+  // ============================================================
+  // HOOKS PERSONNALISÉS
+  // ============================================================
+
+  const { isSubscribed: isSubscribedGlobal, plan, loading: subscriptionLoading } = useSubscriptionCheck(etablissementId);
+
+  const {
+    classesStats,
+    matieresStats,
+    elevesList,
+    statsGenerales,
+    alertes,
+    graphiqueComparatif,
+    loading: notesLoading,
+    refresh: refreshNotes,
+    isSubscribed: isSubscribedChef,
+  } = useChefNotes(etablissementId, selectedAnneeScolaireId, selectedClasseId, selectedPeriodeId);
+
+  const isSubscribed = isSubscribedGlobal || isSubscribedChef;
+
+  const {
+    periodStatus,
+    openPeriod,
+    closePeriod: closePeriodHook,
+    refresh: refreshPeriods,
+  } = usePeriodValidation(etablissementId, selectedAnneeScolaireId);
+
+  const {
+    exportToExcel,
+    generateRapport,
+    generateTableauHonneur,
+    generateBulletin,
+    generateBulletinsBatch,
+    getPreviewData,
+    generateExportClassePDF,
+    generateExportMatierePDF,
+    generateExportClassePDFPreview,
+    generateExportMatierePDFPreview,
+    generateRapportPreview,
+  } = useNotesExport(etablissementId, selectedAnneeScolaireId);
+
+  // ============================================================
+  // VALEURS DÉRIVÉES
+  // ============================================================
+  const currentAnneeLibelle = anneesScolaires.find(a => a.id === selectedAnneeScolaireId)?.libelle || '';
+
+  // ============================================================
+  // CHARGEMENT DES PÉRIODES
+  // ============================================================
+  const loadPeriodes = useCallback(async () => {
+    if (!selectedAnneeScolaireId) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('periodes')
+        .select('id, libelle, ordre')
+        .eq('etablissement_id', etablissementId)
+        .eq('annee_scolaire_id', selectedAnneeScolaireId)
+        .eq('categorie', 'normale')
+        .order('ordre', { ascending: true });
+
+      if (error) throw error;
+      
+      setPeriodes(data || []);
+      
+      // DEBUG: Afficher les périodes chargées
+      console.log('🔍 [ChefNotesView] Périodes chargées:', data);
+    } catch (error) {
+      console.error('Erreur chargement périodes:', error);
+    }
+  }, [etablissementId, selectedAnneeScolaireId]);
+
+  // Sélection automatique de la première période après chargement
+  useEffect(() => {
+    if (periodes.length > 0 && !selectedPeriodeId) {
+      console.log('🔍 [ChefNotesView] Sélection automatique de la première période:', periodes[0]);
+      setSelectedPeriodeId(periodes[0].id);
+      setSelectedPeriodeLabel(periodes[0].libelle);
+    }
+  }, [periodes, selectedPeriodeId]);
+
+  // ============================================================
+  // CHARGEMENT INITIAL
+  // ============================================================
+  useEffect(() => {
+    loadInitialData();
+  }, [etablissementId]);
+
+  // Recharger les périodes quand l'année scolaire change
+  useEffect(() => {
+    if (selectedAnneeScolaireId) {
+      loadPeriodes();
+    }
+  }, [selectedAnneeScolaireId, loadPeriodes]);
+
+  const loadInitialData = async () => {
+    try {
+      const { data: anneesData } = await supabase
+        .from('annees_scolaires')
+        .select('*')
+        .eq('etablissement_id', etablissementId)
+        .order('date_debut', { ascending: false });
+      if (anneesData) {
+        setAnneesScolaires(anneesData);
+        const activeAnnee = anneesData.find(a => a.is_active);
+        const anneeId = activeAnnee?.id || anneesData[0]?.id || '';
+        setSelectedAnneeScolaireId(anneeId);
+      }
+
+      const { data: etabData } = await supabase.from('etablissements').select('regime').eq('id', etablissementId).single();
+      if (etabData?.regime) {
+        setRegime(etabData.regime as Regime);
+      }
+
+      const { data: classesData } = await supabase.from('classes').select('id, nom').eq('etablissement_id', etablissementId);
+      if (classesData) setClasses(classesData);
+
+      const { data: matieresData } = await supabase.from('matieres').select('id, nom').eq('etablissement_id', etablissementId);
+      if (matieresData) setMatieres(matieresData);
+    } catch (error) {
+      console.error('Error loading initial data:', error);
+    }
+  };
+
+  // ============================================================
+  // HANDLERS
+  // ============================================================
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([refreshNotes(), refreshPeriods(), loadPeriodes()]);
+    setRefreshing(false);
+  }, [refreshNotes, refreshPeriods, loadPeriodes]);
+
+  const handleSelectClasse = (classeId: string, classeNom: string) => {
+    setSelectedClasseId(classeId);
+    setSelectedClasseNom(classeNom);
+    setSelectedMatiereId(null);
+    setSelectedMatiereNom('');
+  };
+
+  const handleClearClasse = () => {
+    setSelectedClasseId(null);
+    setSelectedClasseNom('');
+    setSelectedMatiereId(null);
+    setSelectedMatiereNom('');
+  };
+
+  const handleSelectMatiere = (matiereId: string, matiereNom: string) => {
+    setSelectedMatiereId(matiereId);
+    setSelectedMatiereNom(matiereNom);
+  };
+
+  const handleClearMatiere = () => {
+    setSelectedMatiereId(null);
+    setSelectedMatiereNom('');
+  };
+
+  const handleSelectEleve = (eleveId: string, eleveNom: string) => {
+    console.log('Élève sélectionné:', eleveId, eleveNom);
+  };
+
+  const handleGenerateBulletin = async (eleveId: string) => {
+    const success = await generateBulletin({
+      eleveId,
+      etablissementId,
+      anneeScolaireId: selectedAnneeScolaireId,
+      periodeId: selectedPeriodeId,
+    });
+    if (!success) {
+      Alert.alert('Information', 'La génération de bulletin est temporairement indisponible.');
+    }
+  };
+
+  const handleOpenPeriod = async (periodeId: string, periodeLibelle: string) => {
+    return await openPeriod(periodeId, periodeLibelle);
+  };
+
+  // Version corrigée de handleClosePeriod avec authentification Supabase standard
+  const handleClosePeriod = async (periodeId: string, periodeLibelle: string) => {
+    const success = await closePeriodHook(periodeId, periodeLibelle);
+    if (success) {
+      await handleRefresh();
+      Alert.alert('Succès', `La période "${periodeLibelle}" a été fermée.`);
+    } else {
+      Alert.alert('Erreur', 'Impossible de fermer la période');
+    }
+    return { success };
+  };
+
+  const handleExportPeriod = async (periodeId: string, periodeLabel: string, format: 'pdf' | 'excel') => {
+    if (format === 'excel') {
+      await exportToExcel({
+        type: 'rapport',
+        etablissementId,
+        anneeScolaireId: selectedAnneeScolaireId,
+        periode: periodeId as Periode,
+        format,
+      });
+    } else {
+      const success = await generateRapport({
+        etablissementId,
+        etablissementNom,
+        anneeScolaireId: selectedAnneeScolaireId,
+        anneeScolaireLibelle: currentAnneeLibelle,
+        periodeLabel: periodeLabel,
+        inclureTableauHonneur: false,
+        format: 'pdf',
+      });
+      if (!success) {
+        Alert.alert('Erreur', 'La génération du PDF a échoué');
+      }
+    }
+  };
+
+  const handleExportClasse = useCallback(async (classeId: string, format: 'pdf' | 'excel') => {
+    if (format === 'excel') {
+      await exportToExcel({
+        type: 'eleves',
+        etablissementId,
+        anneeScolaireId: selectedAnneeScolaireId,
+        periode: selectedPeriodeId as Periode,
+        classeId,
+        format,
+      });
+    } else {
+      const success = await generateExportClassePDF({
+        etablissementId,
+        etablissementNom,
+        anneeScolaireId: selectedAnneeScolaireId,
+        anneeScolaireLibelle: currentAnneeLibelle,
+        periodeLabel: selectedPeriodeLabel,
+        classeId,
+        classeNom: classes.find(c => c.id === classeId)?.nom || '',
+        orientation: 'portrait',
+      });
+      if (!success) {
+        Alert.alert('Erreur', 'La génération du PDF a échoué');
+      }
+    }
+  }, [etablissementId, selectedAnneeScolaireId, selectedPeriodeId, selectedPeriodeLabel, etablissementNom, classes, exportToExcel, generateExportClassePDF, currentAnneeLibelle]);
+
+  const handleExportMatiere = useCallback(async (matiereId: string, format: 'pdf' | 'excel') => {
+    if (!selectedClasseId) {
+      Alert.alert('Information', 'Veuillez d\'abord sélectionner une classe');
+      return;
+    }
+    if (format === 'excel') {
+      await exportToExcel({
+        type: 'matieres',
+        etablissementId,
+        anneeScolaireId: selectedAnneeScolaireId,
+        periode: selectedPeriodeId as Periode,
+        matiereId,
+        format,
+      });
+    } else {
+      const success = await generateExportMatierePDF({
+        etablissementId,
+        etablissementNom,
+        anneeScolaireId: selectedAnneeScolaireId,
+        anneeScolaireLibelle: currentAnneeLibelle,
+        periodeLabel: selectedPeriodeLabel,
+        classeId: selectedClasseId,
+        classeNom: selectedClasseNom,
+        matiereId,
+        matiereNom: matieres.find(m => m.id === matiereId)?.nom || '',
+        orientation: 'portrait',
+      });
+      if (!success) {
+        Alert.alert('Erreur', 'La génération du PDF a échoué');
+      }
+    }
+  }, [etablissementId, selectedAnneeScolaireId, selectedPeriodeId, selectedPeriodeLabel, selectedClasseId, selectedClasseNom, etablissementNom, matieres, exportToExcel, generateExportMatierePDF, currentAnneeLibelle]);
+
+  const handleGenerateRapport = useCallback(async (params: any) => {
+    const success = await generateRapport({
+      ...params,
+      etablissementId,
+      etablissementNom,
+      anneeScolaireId: selectedAnneeScolaireId,
+      anneeScolaireLibelle: currentAnneeLibelle,
+      periodeLabel: selectedPeriodeLabel,
+    });
+    if (!success) {
+      Alert.alert('Information', 'La génération de rapport a échoué.');
+    }
+  }, [etablissementId, selectedAnneeScolaireId, selectedPeriodeLabel, etablissementNom, generateRapport, currentAnneeLibelle]);
+
+  const handleGenerateTableauHonneur = useCallback(async (params: any) => {
+    const success = await generateTableauHonneur({
+      ...params,
+      etablissementId,
+      etablissementNom,
+      anneeScolaireId: selectedAnneeScolaireId,
+      anneeScolaireLibelle: currentAnneeLibelle,
+      periodeLabel: selectedPeriodeLabel,
+    });
+    if (!success) {
+      Alert.alert('Information', 'La génération du tableau d\'honneur a échoué.');
+    }
+  }, [etablissementId, selectedAnneeScolaireId, selectedPeriodeLabel, etablissementNom, generateTableauHonneur, currentAnneeLibelle]);
+
+  const handleSendAlerte = async (message: string, type: string) => {
+    Alert.alert('Information', 'L\'envoi d\'alerte aux enseignants sera disponible prochainement.');
+  };
+
+  const handlePreview = useCallback(async (options: ExportOptions): Promise<string | null> => {
+    if (options.classeId && !options.matiereId) {
+      return await generateExportClassePDFPreview({
+        etablissementId,
+        etablissementNom: options.etablissementNom,
+        anneeScolaireId: selectedAnneeScolaireId,
+        anneeScolaireLibelle: currentAnneeLibelle,
+        periodeLabel: selectedPeriodeLabel,
+        classeId: options.classeId,
+        classeNom: options.classeNom || classes.find(c => c.id === options.classeId)?.nom || '',
+        orientation: options.orientation || 'portrait',
+        columns: options.selectedColumns,
+      });
+    } else if (options.matiereId && options.classeId) {
+      return await generateExportMatierePDFPreview({
+        etablissementId,
+        etablissementNom: options.etablissementNom,
+        anneeScolaireId: selectedAnneeScolaireId,
+        anneeScolaireLibelle: currentAnneeLibelle,
+        periodeLabel: selectedPeriodeLabel,
+        classeId: options.classeId,
+        classeNom: options.classeNom || '',
+        matiereId: options.matiereId,
+        matiereNom: options.matiereNom || '',
+        orientation: options.orientation || 'portrait',
+        columns: options.selectedColumns,
+      });
+    } else {
+      return await generateRapportPreview({
+        etablissementId,
+        etablissementNom: options.etablissementNom,
+        anneeScolaireId: selectedAnneeScolaireId,
+        anneeScolaireLibelle: currentAnneeLibelle,
+        periodeLabel: selectedPeriodeLabel,
+        inclureTableauHonneur: options.includeTableauHonneur || false,
+        orientation: options.orientation || 'landscape',
+      });
+    }
+  }, [etablissementId, selectedAnneeScolaireId, selectedPeriodeLabel, currentAnneeLibelle, classes, generateExportClassePDFPreview, generateExportMatierePDFPreview, generateRapportPreview]);
+
+  const handlePeriodeChange = (periodeId: string, periodeLabel: string) => {
+    setSelectedPeriodeId(periodeId);
+    setSelectedPeriodeLabel(periodeLabel);
+  };
+
+  if (subscriptionLoading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[theme.colors.primary.DEFAULT]} />}
+    >
+      <View style={styles.headerContainer}>
+        <Text style={styles.title}>Notes</Text>
+        <Text style={styles.etablissementNom}>{etablissementNom}</Text>
+        <Text style={styles.anneeText}>{currentAnneeLibelle}</Text>
+      </View>
+
+      <PeriodSelector
+        anneesScolaires={anneesScolaires}
+        selectedAnneeScolaireId={selectedAnneeScolaireId}
+        selectedPeriodeId={selectedPeriodeId}
+        selectedPeriodeLabel={selectedPeriodeLabel}
+        selectedRegime={regime}
+        isSubscribed={!!isSubscribed}
+        onAnneeChange={setSelectedAnneeScolaireId}
+        onPeriodeChange={handlePeriodeChange}
+        onRegimeChange={setRegime}
+        onRefresh={handleRefresh}
+        isLoading={subscriptionLoading}
+        etablissementId={etablissementId}
+      />
+
+      {/* SECTION DES FILTRES - NOUVELLE VERSION AVEC MODALS */}
+      <View style={styles.filtersContainer}>
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setShowClassModal(true)}
+          >
+            <Text style={styles.filterButtonLabel}>Classe :</Text>
+            <Text style={styles.filterButtonValue}>
+              {selectedClasseNom || 'Sélectionner'}
+            </Text>
+            <ChevronDown size={16} color={theme.colors.primary.DEFAULT} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setShowMatiereModal(true)}
+          >
+            <Text style={styles.filterButtonLabel}>Matière :</Text>
+            <Text style={styles.filterButtonValue}>
+              {selectedMatiereNom || 'Sélectionner'}
+            </Text>
+            <ChevronDown size={16} color={theme.colors.primary.DEFAULT} />
+          </TouchableOpacity>
+
+          {(selectedClasseId || selectedMatiereId) && (
+            <TouchableOpacity style={styles.clearButton} onPress={handleClearClasse}>
+              <Text style={styles.clearButtonText}>Effacer tout</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* Modals de filtres */}
+      <ClassFilterModal
+        visible={showClassModal}
+        classes={classes}
+        selectedId={selectedClasseId}
+        onSelect={(id, nom) => {
+          setSelectedClasseId(id);
+          setSelectedClasseNom(nom);
+        }}
+        onClose={() => setShowClassModal(false)}
+      />
+
+      <MatiereFilterModal
+        visible={showMatiereModal}
+        matieres={matieres}
+        selectedId={selectedMatiereId}
+        onSelect={(id, nom) => {
+          setSelectedMatiereId(id);
+          setSelectedMatiereNom(nom);
+        }}
+        onClose={() => setShowMatiereModal(false)}
+      />
+
+      <RechercheBar onSearch={setSearchQuery} isSubscribed={!!isSubscribed} />
+
+      <View style={styles.tabsContainer}>
+        {TABS.map((tab) => (
+          <TouchableOpacity
+            key={tab.id}
+            style={[styles.tab, activeTab === tab.id && styles.tabActive]}
+            onPress={() => setActiveTab(tab.id as any)}
+          >
+            <Text style={[styles.tabText, activeTab === tab.id && styles.tabTextActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <View style={styles.tabContent}>
+        {activeTab === 'synthese' && (
+          <SyntheseTab
+            classesStats={classesStats}
+            statsGenerales={statsGenerales}
+            alertes={alertes}
+            selectedClasseId={selectedClasseId}
+            onSelectClasse={handleSelectClasse}
+            isSubscribed={!!isSubscribed}
+            loading={notesLoading}
+          />
+        )}
+        {activeTab === 'graphiques' && (
+          <GraphiquesTab
+            graphiqueComparatif={graphiqueComparatif}
+            matieresStats={matieresStats}
+            selectedClasseId={selectedClasseId}
+            selectedClasseNom={selectedClasseNom}
+            selectedMatiereId={selectedMatiereId}
+            onSelectMatiere={handleSelectMatiere}
+            isSubscribed={!!isSubscribed}
+            loading={notesLoading}
+          />
+        )}
+        {activeTab === 'eleves' && (
+          <ElevesTab
+            elevesList={elevesList}
+            selectedClasseNom={selectedClasseNom}
+            selectedClasseId={selectedClasseId}
+            anneeScolaireId={selectedAnneeScolaireId}
+            selectedPeriodeId={selectedPeriodeId}
+            onSelectEleve={handleSelectEleve}
+            onGenerateBulletin={handleGenerateBulletin}
+            onGenerateBulletinsBatch={generateBulletinsBatch}
+            isSubscribed={!!isSubscribed}
+            loading={notesLoading}
+          />
+        )}
+        {activeTab === 'matieres' && (
+          <MatiereTab
+            matieresStats={matieresStats}
+            matieres={matieres}
+            selectedClasseId={selectedClasseId}
+            selectedClasseNom={selectedClasseNom}
+            selectedMatiereId={selectedMatiereId}
+            onSelectMatiere={handleSelectMatiere}
+            isSubscribed={!!isSubscribed}
+            loading={notesLoading}
+          />
+        )}
+        {activeTab === 'pilotage' && (
+          <PilotageTab
+            selectedPeriodeId={selectedPeriodeId}
+            selectedPeriodeLabel={selectedPeriodeLabel}
+            periodStatus={periodStatus}
+            onOpen={handleOpenPeriod}
+            onClose={handleClosePeriod}
+            onExport={handleExportPeriod}
+            onExportClasse={handleExportClasse}
+            onExportMatiere={handleExportMatiere}
+            onGenerateRapport={handleGenerateRapport}
+            onGenerateTableauHonneur={handleGenerateTableauHonneur}
+            onSendAlerte={handleSendAlerte}
+            isSubscribed={!!isSubscribed}
+            etablissementId={etablissementId}
+            anneeScolaireId={selectedAnneeScolaireId}
+            anneeScolaireLibelle={currentAnneeLibelle}
+            etablissementNom={etablissementNom}
+            classes={classes}
+            matieres={matieres}
+            plan={plan}
+            getPreviewData={getPreviewData}
+            onPreview={handlePreview}
+          />
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F9FAFB' },
+  content: { padding: 16, paddingBottom: 32 },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F9FAFB' },
+  loadingText: { marginTop: 12, fontSize: 14, color: '#6B7280' },
+  headerContainer: { alignItems: 'center', marginBottom: 16 },
+  title: { fontSize: 28, fontWeight: '700', color: '#1F2937', marginBottom: 4 },
+  etablissementNom: { fontSize: 16, fontWeight: '500', color: theme.colors.primary.DEFAULT, marginBottom: 2 },
+  anneeText: { fontSize: 13, color: '#6B7280' },
+  
+  // Nouveaux styles pour les filtres
+  filtersContainer: { marginBottom: 12 },
+  filterRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginRight: 10,
+    marginBottom: 8,
+  },
+  filterButtonLabel: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  filterButtonValue: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#1F2937',
+  },
+  clearButton: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  clearButtonText: {
+    fontSize: 13,
+    color: '#EF4444',
+    fontWeight: '500',
+  },
+  
+  // Anciens styles conservés pour compatibilité
+  tabsContainer: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderRadius: 12, marginBottom: 16, padding: 4, borderWidth: 1, borderColor: '#E5E7EB' },
+  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
+  tabActive: { backgroundColor: theme.colors.primary.DEFAULT },
+  tabText: { fontSize: 13, color: '#6B7280', fontWeight: '500' },
+  tabTextActive: { color: '#FFFFFF', fontWeight: '600' },
+  tabContent: { marginTop: 4 },
+});

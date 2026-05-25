@@ -1,0 +1,92 @@
+import { useState, useCallback, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
+
+export interface Absence {
+  id: string;
+  eleve_id: string;
+  date_absence: string;
+  heure_debut?: string;
+  heure_fin?: string;
+  motif?: string;
+  justifie: boolean;
+  justificatif_url?: string;
+  declare_par?: string;
+  declare_le?: string;
+  created_at: string;
+}
+
+export function useAbsencesParent(enfantId: string) {
+  const { user } = useAuth();
+  const [absences, setAbsences] = useState<Absence[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const chargerAbsences = useCallback(async () => {
+    if (!user || !enfantId) {
+      setAbsences([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Vérifier que l'enfant appartient bien au parent
+      const { data: parentData, error: parentError } = await supabase
+        .from('parents')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (parentError || !parentData) {
+        setAbsences([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: lien, error: lienError } = await supabase
+        .from('parent_eleve')
+        .select('id')
+        .eq('parent_id', parentData.id)
+        .eq('eleve_id', enfantId)
+        .maybeSingle();
+
+      if (lienError || !lien) {
+        setError('Accès non autorisé à cet enfant');
+        setAbsences([]);
+        setLoading(false);
+        return;
+      }
+
+      // Récupérer les absences
+      const { data, error: absencesError } = await supabase
+        .from('absences')
+        .select('*')
+        .eq('eleve_id', enfantId)
+        .order('date_absence', { ascending: false });
+
+      if (absencesError) throw absencesError;
+
+      setAbsences(data || []);
+    } catch (err) {
+      console.error('Erreur chargement absences:', err);
+      setError(err instanceof Error ? err.message : 'Erreur inconnue');
+      setAbsences([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, enfantId]);
+
+  useEffect(() => {
+    chargerAbsences();
+  }, [chargerAbsences]);
+
+  return {
+    absences,
+    loading,
+    error,
+    refetch: chargerAbsences,
+  };
+}

@@ -1,0 +1,210 @@
+import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator } from 'react-native';
+import { useState, useCallback } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useEnfants } from '@/hooks/useEnfants';
+import EnfantCard from '@/components/parent/EnfantCard';
+import { Users, AlertCircle } from 'lucide-react-native';
+import theme from '@/constants/theme';
+
+export default function ParentDashboardScreen() {
+  const router = useRouter();
+  const { enfants, loading, error, refetch } = useEnfants();
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Rafraîchir les données quand l'écran est affiché
+  useFocusEffect(
+    useCallback(() => {
+      refetch();
+    }, [refetch])
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
+
+  const handleEnfantPress = (enfantId: string) => {
+    // Rediriger vers les notes de l'enfant
+    router.push({
+      pathname: '/(app)/parent/notes',
+      params: { enfantId: enfantId }
+    });
+  };
+
+  // Pendant le chargement initial
+  if (loading && !refreshing) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement de vos enfants...</Text>
+      </View>
+    );
+  }
+
+  // En cas d'erreur
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <AlertCircle size={48} color="#EF4444" />
+        <Text style={styles.errorText}>Une erreur est survenue</Text>
+        <Text style={styles.errorSubtext}>{error}</Text>
+      </View>
+    );
+  }
+
+  // Aucun enfant lié
+  if (!enfants || enfants.length === 0) {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.emptyContainer}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        <Users size={64} color={theme.colors.neutral[300]} />
+        <Text style={styles.emptyTitle}>Aucun enfant lié</Text>
+        <Text style={styles.emptyText}>
+          Vous n'avez encore aucun enfant lié à votre compte parent.
+        </Text>
+        <Text style={styles.emptyHint}>
+          Contactez l'établissement scolaire de votre enfant pour obtenir un code d'invitation.
+        </Text>
+      </ScrollView>
+    );
+  }
+
+  // Regrouper les enfants par établissement
+  const enfantsParEtablissement = enfants.reduce((acc, enfant) => {
+    const etab = enfant.etablissement_nom;
+    if (!acc[etab]) acc[etab] = [];
+    acc[etab].push(enfant);
+    return acc;
+  }, {} as Record<string, typeof enfants>);
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.header}>
+        <Text style={styles.title}>Mes enfants</Text>
+        <Text style={styles.subtitle}>
+          {enfants.length} enfant{enfants.length > 1 ? 's' : ''} à suivre
+        </Text>
+      </View>
+
+      {Object.entries(enfantsParEtablissement).map(([etablissementNom, enfantsListe]) => (
+        <View key={etablissementNom} style={styles.etablissementSection}>
+          <View style={styles.etablissementHeader}>
+            <Text style={styles.etablissementNom}>{etablissementNom}</Text>
+            <Text style={styles.etablissementCount}>
+              {enfantsListe.length} enfant{enfantsListe.length > 1 ? 's' : ''}
+            </Text>
+          </View>
+          {enfantsListe.map((enfant) => (
+            <EnfantCard
+              key={enfant.id}
+              enfant={enfant}
+              onPress={handleEnfantPress}
+            />
+          ))}
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    paddingHorizontal: 16,
+    paddingBottom: 32,
+  },
+  header: {
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  errorText: {
+    marginTop: 16,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+  errorSubtext: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    marginTop: 16,
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  emptyText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+  emptyHint: {
+    marginTop: 16,
+    fontSize: 13,
+    color: '#9CA3AF',
+    textAlign: 'center',
+  },
+  etablissementSection: {
+    marginBottom: 24,
+  },
+  etablissementHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  etablissementNom: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: theme.colors.primary.DEFAULT,
+  },
+  etablissementCount: {
+    fontSize: 12,
+    color: '#9CA3AF',
+  },
+});

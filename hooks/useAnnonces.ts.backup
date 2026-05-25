@@ -1,0 +1,163 @@
+import { useState, useCallback, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
+
+export interface Annonce {
+  id: string;
+  titre: string;
+  contenu: string;
+  type: 'classe' | 'etablissement' | 'cycle' | 'promotion';
+  visibilite: 'parents' | 'enseignants' | 'tous';
+  classe_id?: string;
+  classe_nom?: string;
+  etablissement_id?: string;
+  etablissement_nom?: string;
+  publie_par_id: string;
+  publie_par_nom: string;
+  publie_par_prenom: string;
+  created_at: string;
+  date_debut?: string;
+  date_fin?: string;
+  est_epingle: boolean;
+}
+
+export function useAnnonces() {
+  const { user, activeRole } = useAuth();
+  const [annonces, setAnnonces] = useState<Annonce[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const chargerAnnonces = useCallback(async () => {
+    if (!user) {
+      setAnnonces([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      let query = supabase
+        .from('publications')
+        .select(`
+          *,
+          publie_par:publie_par_id (nom, prenom),
+          classe:classe_id (nom),
+          etablissement:etablissement_id (nom)
+        `)
+        .eq('est_publiee', true)
+        .order('est_epingle', { ascending: false })
+        .order('created_at', { ascending: false });
+
+      // Si l'utilisateur est un parent, filtrer par ses enfants
+      if (activeRole === 'parent') {
+        // Récupérer le parent
+        const { data: parentData } = await supabase
+          .from('parents')
+          .select('id')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (parentData) {
+          // Récupérer les classes des enfants
+          const { data: enfants } = await supabase
+            .from('parent_eleve')
+            .select(`
+              eleve:eleve_id (
+                classe_id,
+                etablissement_id
+              )
+            `)
+            .eq('parent_id', parentData.id);
+
+          const classeIds = new Set<string>();
+          const etablissementIds = new Set<string>();
+
+          for (const item of enfants || []) {
+            const eleve = item.eleve as any;
+            if (eleve?.classe_id) classeIds.add(eleve.classe_id);
+            if (eleve?.etablissement_id) etablissementIds.add(eleve.etablissement_id);
+          }
+
+          if (classeIds.size === 0 && etablissementIds.size === 0) {
+            setAnnonces([]);
+            setLoading(false);
+            return;
+          }
+
+          // Filtrer par classes et établissements
+          const orConditions: string[] = [];
+          if (classeIds.size > 0) {
+            orConditions.push(`classe_id.in.(${[...classeIds].join(',')})`);
+          }
+          if (etablissementIds.size > 0) {
+            orConditions.push(`etablissement_id.in.(${[...etablissementIds].join(',')})`);
+          }
+          orConditions.push(`visibilite.eq.tous`);
+
+          query = query.or(orConditions.join(','));
+        }
+      }
+
+      // Si l'utilisateur est un enseignant, filtrer par ses classes
+      else if (activeRole === 'enseignant') {
+        const { data: classes } = await supabase
+          .from('enseignant_classes')
+          .select('classe_id')
+          .eq('enseignant_id', user.id);
+
+        const classeIds = classes?.map(c => c.classe_id) || [];
+        
+        if (classeIds.length > 0) {
+          const orConditions: string[] = [
+            `classe_id.in.(${classeIds.join(',')})`,
+            `visibilite.eq.tous`
+          ];
+          query = query.or(orConditions.join(','));
+        }
+      }
+
+      const { data, error: queryError } = await query;
+
+      if (queryError) throw queryError;
+
+      const formatted: Annonce[] = (data || []).map((item: any) => ({
+        id: item.id,
+        titre: item.titre,
+        contenu: item.contenu,
+        type: item.type,
+        visibilite: item.visibilite,
+        classe_id: item.classe_id,
+        classe_nom: item.classe?.nom,
+        etablissement_id: item.etablissement_id,
+        etablissement_nom: item.etablissement?.nom,
+        publie_par_id: item.publie_par_id,
+        publie_par_nom: item.publie_par?.nom || '',
+        publie_par_prenom: item.publie_par?.prenom || '',
+        created_at: item.created_at,
+        date_debut: item.date_debut,
+        date_fin: item.date_fin,
+        est_epingle: item.est_epingle || false,
+      }));
+
+      setAnnonces(formatted);
+    } catch (err) {
+      console.error('Erreur chargement annonces:', err);
+      setError(err instanceof Error ? err.message : 'Erreur inconnue');
+    } finally {
+      setLoading(false);
+    }
+  }, [user, activeRole]);
+
+  useEffect(() => {
+    chargerAnnonces();
+  }, [chargerAnnonces]);
+
+  return {
+    annonces,
+    loading,
+    error,
+    refetch: chargerAnnonces,
+  };
+}

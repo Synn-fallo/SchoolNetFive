@@ -1,0 +1,509 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput } from 'react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
+import { useParents } from '@/hooks/useParents';
+import { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Card } from '@/components/Card';
+import ParentSearchResult from '@/components/parents/ParentSearchResult';
+import { ArrowLeft, Search, Phone, Mail, UserPlus } from 'lucide-react-native';
+import theme from '@/constants/theme';
+import { useToast } from '@/contexts/ToastContext';
+
+export default function AjouterParentScreen() {
+  const router = useRouter();
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const { hasRole } = useAuth();
+  const { 
+    verifierParentExistant, 
+    lierParentAEleve, 
+    creerParentSansAuth,
+    getExistingLiensForEleve,
+    hasParentPrincipalForEleve
+  } = useParents();
+  const { showToast } = useToast();
+  
+  // État pour l'élève actuel
+  const [eleve, setEleve] = useState<{ nom: string; prenom: string; classe_nom?: string } | null>(null);
+  
+  // État pour la recherche
+  const [searchType, setSearchType] = useState<'telephone' | 'email'>('telephone');
+  const [searchValue, setSearchValue] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [searchResult, setSearchResult] = useState<any>(null);
+  const [enfantsExistants, setEnfantsExistants] = useState<any[]>([]);
+  const [isAlreadyLinked, setIsAlreadyLinked] = useState(false);
+  
+  // État pour les contraintes de liaison
+  const [existingLiens, setExistingLiens] = useState<string[]>([]);
+  const [hasPrincipal, setHasPrincipal] = useState(false);
+  
+  // État pour la création
+  const [isCreating, setIsCreating] = useState(false);
+
+  const isChefOrDE = hasRole('chef_etablissement');
+
+  // Récupérer les infos de l'élève actuel et les contraintes
+  const fetchInitialData = async () => {
+    // 1. Récupérer l'élève
+    const { data: eleveData, error: eleveError } = await supabase
+      .from('eleves')
+      .select('id, user_id, classe_id')
+      .eq('id', id)
+      .single();
+  
+    if (eleveError) {
+      console.error('Erreur chargement élève:', eleveError);
+      return;
+    }
+  
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('nom, prenom')
+      .eq('id', eleveData.user_id)
+      .single();
+  
+    let classeNom = '';
+    if (eleveData.classe_id) {
+      const { data: classeData } = await supabase
+        .from('classes')
+        .select('nom')
+        .eq('id', eleveData.classe_id)
+        .single();
+      classeNom = classeData?.nom || '';
+    }
+  
+    setEleve({
+      nom: profileData?.nom || '',
+      prenom: profileData?.prenom || '',
+      classe_nom: classeNom,
+    });
+
+    // 2. Récupérer les contraintes de liaison
+    const liens = await getExistingLiensForEleve(id as string);
+    const principal = await hasParentPrincipalForEleve(id as string);
+    setExistingLiens(liens);
+    setHasPrincipal(principal);
+  };
+
+  // Vérifier si le parent est déjà lié à CET élève
+  const checkIfAlreadyLinked = async (parentId: string, eleveId: string) => {
+    try {
+      const { data: lienExistant, error: lienError } = await supabase
+        .from('parent_eleve')
+        .select('id')
+        .eq('parent_id', parentId)
+        .eq('eleve_id', eleveId)
+        .maybeSingle();
+
+      if (lienError) {
+        console.error('Erreur vérification lien:', lienError);
+        return false;
+      }
+
+      return !!lienExistant;
+    } catch (error) {
+      console.error('Error checking link:', error);
+      return false;
+    }
+  };
+
+  // Recherche automatique pour téléphone
+  useEffect(() => {
+    if (searchType === 'telephone' && !hasSearched) {
+      const digits = searchValue.replace(/\D/g, '');
+      if (digits.length === 10) {
+        handleSearch();
+      }
+    }
+  }, [searchValue, searchType]);
+
+  // Recherche automatique pour email avec debounce
+  useEffect(() => {
+    if (searchType === 'email' && !hasSearched) {
+      const isValid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(searchValue);
+      if (isValid) {
+        const timer = setTimeout(() => handleSearch(), 500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [searchValue, searchType]);
+
+  // Charger les données initiales au montage
+  useEffect(() => {
+    fetchInitialData();
+  }, [id]);
+
+  const handleSearch = async () => {
+    if (!searchValue.trim()) {
+      showToast('error', `Veuillez saisir un ${searchType === 'telephone' ? 'numéro de téléphone' : 'email'}`);
+      return;
+    }
+
+    setIsSearching(true);
+    setHasSearched(true);
+    setSearchResult(null);
+    setEnfantsExistants([]);
+    setIsAlreadyLinked(false);
+
+    try {
+      const result = await verifierParentExistant(searchValue, searchType);
+      
+      if (result.exists && result.parent) {
+        const alreadyLinked = await checkIfAlreadyLinked(result.parent.id, id as string);
+        setIsAlreadyLinked(alreadyLinked);
+        setSearchResult(result.parent);
+      } else {
+        setSearchResult(null);
+      }
+    } catch (error) {
+      console.error('Search error:', error);
+      showToast('error', 'Une erreur est survenue lors de la recherche');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleLinkParent = async (typeLien: string, estPrincipal: boolean) => {
+    if (!searchResult) return;
+
+    setIsSearching(true);
+    const result = await lierParentAEleve(searchResult.id, id as string, typeLien as any, estPrincipal);
+    setIsSearching(false);
+
+    if (result.success) {
+      showToast('success', `Parent ${searchResult.prenom} ${searchResult.nom} lié à ${eleve?.prenom} ${eleve?.nom}`);
+      setTimeout(() => router.back(), 1500);
+    } else {
+      showToast('error', result.error || 'Impossible de lier le parent');
+    }
+  };
+
+  const handleCreateParent = async (data: {
+    nom: string;
+    prenom: string;
+    telephone: string;
+    email_personnel?: string;
+    type_lien: string;
+    est_principal: boolean;
+  }) => {
+    setIsCreating(true);
+    
+    try {
+      const createResult = await creerParentSansAuth(
+        data.nom,
+        data.prenom,
+        data.telephone,
+        data.email_personnel || null
+      );
+
+      if (!createResult.success || !createResult.parent) {
+        showToast('error', createResult.error || 'Impossible de créer le parent');
+        return;
+      }
+
+      const linkResult = await lierParentAEleve(
+        createResult.parent.id, 
+        id as string, 
+        data.type_lien as any, 
+        data.est_principal
+      );
+
+      if (!linkResult.success) {
+        showToast('error', 'Parent créé mais impossible de le lier');
+        return;
+      }
+
+      if (createResult.codeInvitation) {
+        Alert.alert(
+          'Parent créé avec succès',
+          `Un code d'invitation a été généré : ${createResult.codeInvitation}\n\n`
+          + `Partagez ce code avec le parent pour qu'il puisse créer son compte SchoolNet.\n\n`
+          + `Le code expire dans 7 jours.`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      } else {
+        showToast('success', `Parent ${data.prenom} ${data.nom} créé et lié à ${eleve?.prenom} ${eleve?.nom}`);
+        setTimeout(() => router.back(), 1500);
+      }
+    } catch (error) {
+      console.error('Error creating parent:', error);
+      showToast('error', 'Une erreur est survenue lors de la création');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleCancelSearch = () => {
+    setSearchResult(null);
+    setSearchValue('');
+    setHasSearched(false);
+  };
+
+  const handleNewSearch = () => {
+    setHasSearched(false);
+    setSearchResult(null);
+    setSearchValue('');
+  };
+
+  if (!isChefOrDE) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>Accès non autorisé</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <Text style={styles.backButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const handlePhoneInput = (text: string) => {
+    const digits = text.replace(/\D/g, '');
+    if (digits.length <= 10) {
+      setSearchValue(digits);
+    }
+  };
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButtonHeader}>
+          <ArrowLeft size={24} color="#1F2937" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Ajouter un parent</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      {eleve && (
+        <Card style={styles.eleveCard}>
+          <Text style={styles.eleveTitle}>👨‍🎓 Élève concerné</Text>
+          <Text style={styles.eleveName}>{eleve.prenom} {eleve.nom}</Text>
+          {eleve.classe_nom && (
+            <Text style={styles.eleveClasse}>Classe : {eleve.classe_nom}</Text>
+          )}
+        </Card>
+      )}
+
+      {/* Formulaire de recherche */}
+      <Card style={styles.card}>
+        <Text style={styles.sectionTitle}>🔍 Rechercher un parent</Text>
+        
+        <View style={styles.searchTypeContainer}>
+          <TouchableOpacity
+            style={[styles.searchTypeOption, searchType === 'telephone' && styles.searchTypeActive]}
+            onPress={() => setSearchType('telephone')}
+          >
+            <Phone size={16} color={searchType === 'telephone' ? theme.colors.primary.DEFAULT : '#6B7280'} />
+            <Text style={[styles.searchTypeText, searchType === 'telephone' && styles.searchTypeTextActive]}>
+              Téléphone
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.searchTypeOption, searchType === 'email' && styles.searchTypeActive]}
+            onPress={() => setSearchType('email')}
+          >
+            <Mail size={16} color={searchType === 'email' ? theme.colors.primary.DEFAULT : '#6B7280'} />
+            <Text style={[styles.searchTypeText, searchType === 'email' && styles.searchTypeTextActive]}>
+              Email
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder={searchType === 'telephone' ? 'xx xx xx xx xx' : 'email@exemple.com'}
+            value={searchValue}
+            onChangeText={searchType === 'telephone' ? handlePhoneInput : setSearchValue}
+            keyboardType={searchType === 'telephone' ? 'number-pad' : 'email-address'}
+            autoCapitalize="none"
+            maxLength={searchType === 'telephone' ? 10 : undefined}
+            editable={!hasSearched}
+          />
+          <TouchableOpacity 
+            style={[styles.searchButton, (isSearching || hasSearched) && styles.searchButtonDisabled]}
+            onPress={handleSearch}
+            disabled={isSearching || hasSearched || !searchValue.trim()}
+          >
+            {isSearching ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Search size={18} color="#FFFFFF" />
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {hasSearched && (
+          <TouchableOpacity style={styles.newSearchButton} onPress={handleNewSearch}>
+            <Text style={styles.newSearchButtonText}>+ Nouvelle recherche</Text>
+          </TouchableOpacity>
+        )}
+      </Card>
+
+      {/* Résultat ou formulaire de création */}
+      {hasSearched && (
+        <ParentSearchResult
+          parent={searchResult || undefined}
+          enfantsExistants={enfantsExistants}
+          isAlreadyLinkedToCurrentEleve={isAlreadyLinked}
+          onLink={handleLinkParent}
+          onCreateParent={handleCreateParent}
+          onCancel={handleCancelSearch}
+          isLoading={isSearching}
+          isCreating={isCreating}
+          searchType={searchType}
+          searchValue={searchValue}
+          existingLiens={existingLiens}
+          hasParentPrincipal={hasPrincipal}
+        />
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  backButtonHeader: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  eleveCard: {
+    padding: 16,
+    marginBottom: 16,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  eleveTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 8,
+  },
+  eleveName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  eleveClasse: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  card: {
+    padding: 20,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 16,
+  },
+  searchTypeContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  searchTypeOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchTypeActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  searchTypeText: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  searchTypeTextActive: {
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  searchInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#1F2937',
+    backgroundColor: '#EFF6FF',
+  },
+  searchButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    justifyContent: 'center',
+  },
+  searchButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  newSearchButton: {
+    marginTop: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  newSearchButtonText: {
+    fontSize: 13,
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  backButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#EF4444',
+    marginBottom: 16,
+  },
+});

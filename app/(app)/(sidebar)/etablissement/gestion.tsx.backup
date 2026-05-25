@@ -1,0 +1,611 @@
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
+import { Building2, CheckCircle, AlertCircle, ChevronRight, Globe, Copy } from 'lucide-react-native';
+import EtablissementForm from '@/components/etablissement/EtablissementForm';
+import EtablissementSummary from '@/components/etablissement/EtablissementSummary';
+import EtablissementStatusBadge from '@/components/etablissement/StatusBadge';
+import theme from '@/constants/theme';
+
+interface EtablissementData {
+  id: string;
+  nom: string;
+  slug: string;
+  statut: string;
+  is_active: boolean;
+  description?: string;
+  logo_url?: string;
+  ville?: string;
+  telephone?: string;
+  email?: string;
+  sous_domaine?: string;
+  metadata: any;
+}
+
+export default function GestionEtablissementScreen() {
+  const { user, hasRole, refreshProfile } = useAuth();
+  const router = useRouter();
+  const { id: urlEtablissementId } = useLocalSearchParams<{ id: string }>();
+  const [etablissement, setEtablissement] = useState<EtablissementData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const [showForm, setShowForm] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchEtablissement();
+  }, [user, urlEtablissementId]);
+
+  const fetchEtablissement = async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      let etablissementIdToFetch = urlEtablissementId;
+
+      if (!etablissementIdToFetch) {
+        const { data: roleData, error: roleError } = await supabase
+          .from('user_roles')
+          .select('etablissement_id')
+          .eq('user_id', user.id)
+          .eq('role', 'chef_etablissement')
+          .eq('is_active', true)
+          .not('etablissement_id', 'is', null)
+          .maybeSingle();
+
+        if (roleError) throw roleError;
+        etablissementIdToFetch = roleData?.etablissement_id;
+      }
+
+      if (!etablissementIdToFetch) {
+        setError('Aucun établissement trouvé');
+        setLoading(false);
+        return;
+      }
+
+      const { data: etabData, error: etabError } = await supabase
+        .from('etablissements')
+        .select('*')
+        .eq('id', etablissementIdToFetch)
+        .single();
+
+      if (etabError) throw etabError;
+      
+      setEtablissement(etabData);
+      
+      // ✅ CORRECTION : Vérifier si des informations ont déjà été saisies
+      const hasSomeInfo = etabData.metadata?.regime || 
+                          etabData.metadata?.corps || 
+                          etabData.description ||
+                          etabData.metadata?.description_courte ||
+                          etabData.metadata?.enseignement ||
+                          (etabData.metadata?.cycles && etabData.metadata.cycles.length > 0);
+      
+      // Si des informations existent, afficher le récapitulatif
+      // Sinon, afficher le formulaire
+      setShowForm(!hasSomeInfo);
+    } catch (error) {
+      console.error('Error fetching etablissement:', error);
+      setError('Impossible de charger les informations de votre établissement');
+      Alert.alert('Erreur', 'Impossible de charger les informations de votre établissement');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleComplete = () => {
+    fetchEtablissement();
+    refreshProfile();
+  };
+
+  const handleEdit = () => {
+    setShowForm(true);
+  };
+
+  const handleCancelEdit = () => {
+    // Revenir au récapitulatif
+    setShowForm(false);
+  };
+
+  const handleViewPreview = () => {
+    if (etablissement?.slug) {
+      router.push(`/(app)/(sidebar)/etablissement/preview?id=${etablissement.id}`);
+    }
+  };
+
+  const handleGoToSubscription = () => {
+    router.push(`/(app)/(sidebar)/etablissement/abonnement?id=${etablissement?.id}`);
+  };
+
+  const handleCopyUrl = async () => {
+    if (etablissement?.sous_domaine) {
+      try {
+        await navigator.clipboard.writeText(etablissement.sous_domaine);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        Alert.alert('URL copiée', etablissement.sous_domaine);
+      } catch (err) {
+        Alert.alert('Erreur', 'Impossible de copier l\'URL');
+      }
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+      </View>
+    );
+  }
+
+  if (error || !etablissement) {
+    return (
+      <View style={styles.centerContainer}>
+        <View style={styles.infoCard}>
+          <AlertCircle size={48} color={theme.colors.danger.DEFAULT} />
+          <Text style={styles.infoTitle}>Établissement non trouvé</Text>
+          <Text style={styles.infoText}>
+            {error || 'L\'établissement que vous recherchez n\'existe pas ou vous n\'y avez pas accès.'}
+          </Text>
+          <TouchableOpacity
+            style={styles.infoButton}
+            onPress={() => router.push('/(app)/(sidebar)/mes-etablissements')}
+          >
+            <Text style={styles.infoButtonText}>Voir mes établissements</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  const isActive = etablissement.statut === 'ACTIF';
+  const isWaitingForInfo = etablissement.statut === 'EN_ATTENTE_ACTIVATION';
+  const isInfoComplete = etablissement.statut === 'INFOS_COMPLETES';
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <View style={styles.headerRow}>
+          <Building2 size={32} color={theme.colors.primary.DEFAULT} />
+          <Text style={styles.title}>{etablissement.nom}</Text>
+        </View>
+        <EtablissementStatusBadge statut={etablissement.statut} size="medium" />
+      </View>
+
+      {(isWaitingForInfo || isInfoComplete) && (
+        <View style={styles.configurationCard}>
+          <View style={styles.configurationHeader}>
+            <AlertCircle size={20} color="#F59E0B" />
+            <Text style={styles.configurationTitle}>Site en configuration</Text>
+          </View>
+          <Text style={styles.configurationText}>
+            Votre établissement est visible dans l'annuaire avec un badge "En configuration".
+            Pour le rendre public et visible par tous, souscrivez à un abonnement.
+          </Text>
+          {!isActive && (
+            <TouchableOpacity style={styles.configurationButton} onPress={handleGoToSubscription}>
+              <Text style={styles.configurationButtonText}>Souscrire un abonnement</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      <View style={styles.infoSection}>
+        <Text style={styles.sectionTitle}>Informations de base</Text>
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>Ville :</Text>
+          <Text style={styles.value}>{etablissement.ville || 'Non renseignée'}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>Téléphone :</Text>
+          <Text style={styles.value}>{etablissement.telephone || 'Non renseigné'}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>Email :</Text>
+          <Text style={styles.value}>{etablissement.email || 'Non renseigné'}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>Slug :</Text>
+          <Text style={styles.value}>{etablissement.slug}</Text>
+        </View>
+      </View>
+
+      {isActive && etablissement.sous_domaine && (
+        <View style={styles.urlSection}>
+          <Text style={styles.sectionTitle}>🌐 Votre site officiel</Text>
+          <View style={styles.urlCard}>
+            <Globe size={24} color={theme.colors.primary.DEFAULT} />
+            <View style={styles.urlContent}>
+              <Text style={styles.urlLabel}>Adresse de votre site</Text>
+              <Text style={styles.urlValue}>{etablissement.sous_domaine}</Text>
+              <Text style={styles.urlHint}>
+                Partagez ce lien sur vos réseaux sociaux, flyers et tous vos supports de communication.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.copyUrlButton} onPress={handleCopyUrl}>
+              {copied ? (
+                <CheckCircle size={18} color={theme.colors.success.DEFAULT} />
+              ) : (
+                <Copy size={18} color={theme.colors.primary.DEFAULT} />
+              )}
+              <Text style={styles.copyUrlText}>{copied ? 'Copié !' : 'Copier'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      <View style={styles.statusSection}>
+        <Text style={styles.sectionTitle}>État de votre établissement</Text>
+        
+        {isWaitingForInfo && (
+          <View style={styles.statusCard}>
+            <AlertCircle size={24} color="#D97706" />
+            <View style={styles.statusContent}>
+              <Text style={styles.statusTitle}>En attente d'informations</Text>
+              <Text style={styles.statusText}>
+                Votre établissement a été validé. Complétez les informations ci-dessous pour continuer.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {isInfoComplete && (
+          <View style={styles.statusCardSuccess}>
+            <CheckCircle size={24} color={theme.colors.success.DEFAULT} />
+            <View style={styles.statusContent}>
+              <Text style={styles.statusTitleSuccess}>Informations complètes</Text>
+              <Text style={styles.statusTextSuccess}>
+                Votre établissement est prêt à être activé. Souscrivez à un abonnement pour le rendre public.
+              </Text>
+              <TouchableOpacity style={styles.subscribeButton} onPress={handleGoToSubscription}>
+                <Text style={styles.subscribeButtonText}>Souscrire un abonnement</Text>
+                <ChevronRight size={16} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {isActive && (
+          <View style={styles.statusCardActive}>
+            <CheckCircle size={24} color={theme.colors.success.DEFAULT} />
+            <View style={styles.statusContent}>
+              <Text style={styles.statusTitleActive}>Site actif</Text>
+              <Text style={styles.statusTextActive}>
+                Votre établissement est visible publiquement.
+              </Text>
+              <TouchableOpacity style={styles.previewButton} onPress={handleViewPreview}>
+                <Text style={styles.previewButtonText}>Voir mon site</Text>
+                <ChevronRight size={16} color={theme.colors.primary.DEFAULT} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* Formulaire ou récapitulatif */}
+      <View style={styles.formSection}>
+        {showForm ? (
+          <EtablissementForm
+            etablissementId={etablissement.id}
+            initialData={{
+              description_courte: etablissement.metadata?.description_courte,
+              description: etablissement.description,
+              logo_url: etablissement.logo_url,
+              regime: etablissement.metadata?.regime,
+              corps: etablissement.metadata?.corps,
+              enseignement: etablissement.metadata?.enseignement,
+              cycles: etablissement.metadata?.cycles,
+              options: etablissement.metadata?.options,
+              taux_reussite: etablissement.metadata?.taux_reussite,
+            }}
+            onComplete={handleComplete}
+            onCancel={handleCancelEdit}
+          />
+        ) : (
+          <EtablissementSummary
+            data={{
+              nom: etablissement.nom,
+              description_courte: etablissement.metadata?.description_courte,
+              description: etablissement.description,
+              logo_url: etablissement.logo_url,
+              ville: etablissement.ville,
+              telephone: etablissement.telephone,
+              email: etablissement.email,
+              site_web: etablissement.site_web,
+              metadata: etablissement.metadata,
+            }}
+            onEdit={handleEdit}
+          />
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  infoSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 16,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  label: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  value: {
+    fontSize: 14,
+    color: '#1F2937',
+    fontWeight: '500',
+  },
+  urlSection: {
+    marginBottom: 16,
+  },
+  urlCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  urlContent: {
+    flex: 1,
+  },
+  urlLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 2,
+  },
+  urlValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 4,
+  },
+  urlHint: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
+  copyUrlButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#3B82F6',
+  },
+  copyUrlText: {
+    fontSize: 12,
+    color: '#3B82F6',
+    fontWeight: '500',
+  },
+  statusSection: {
+    marginBottom: 16,
+  },
+  statusCard: {
+    flexDirection: 'row',
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  statusCardSuccess: {
+    flexDirection: 'row',
+    backgroundColor: '#D1FAE5',
+    borderRadius: 12,
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  statusCardActive: {
+    flexDirection: 'row',
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  statusContent: {
+    flex: 1,
+  },
+  statusTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#D97706',
+    marginBottom: 4,
+  },
+  statusTitleSuccess: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#10B981',
+    marginBottom: 4,
+  },
+  statusTitleActive: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3B82F6',
+    marginBottom: 4,
+  },
+  statusText: {
+    fontSize: 12,
+    color: '#92400E',
+  },
+  statusTextSuccess: {
+    fontSize: 12,
+    color: '#065F46',
+    marginBottom: 12,
+  },
+  statusTextActive: {
+    fontSize: 12,
+    color: '#1E40AF',
+    marginBottom: 12,
+  },
+  subscribeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#10B981',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    gap: 4,
+  },
+  subscribeButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  previewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#3B82F6',
+  },
+  previewButtonText: {
+    color: '#3B82F6',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  formSection: {
+    marginTop: 16,
+  },
+  infoCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  infoTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  infoButton: {
+    backgroundColor: '#3B82F6',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  infoButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  configurationCard: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  configurationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  configurationTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#D97706',
+  },
+  configurationText: {
+    fontSize: 13,
+    color: '#92400E',
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  configurationButton: {
+    backgroundColor: '#F59E0B',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  configurationButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+});

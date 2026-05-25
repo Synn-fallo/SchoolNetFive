@@ -1,0 +1,660 @@
+// /home/project/components/parametres/OngletScolarite.tsx
+// Onglet Scolarité – Gestion de l'éligibilité des élèves
+
+import { View, Text, StyleSheet, Switch, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Modal, FlatList } from 'react-native';
+import { useState, useEffect } from 'react';
+import { Save, RefreshCw, AlertTriangle, CheckCircle, GraduationCap, Wallet, FileCheck, ChevronDown } from 'lucide-react-native';
+import { useParametreBlocageBulletins } from '@/hooks/useParametresEtablissement';
+import { supabase } from '@/lib/supabase';
+import theme from '@/constants/theme';
+
+interface OngletScolariteProps {
+  etablissementId: string;
+}
+
+export default function OngletScolarite({ etablissementId }: OngletScolariteProps) {
+  const [actif, setActif] = useState(false);
+  const [conditions, setConditions] = useState({
+    frais_scolarite: true,
+    inscription_validee: true,
+    documents_administratifs: false,
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const [testEleveId, setTestEleveId] = useState<string>('');
+  const [testEleveNom, setTestEleveNom] = useState<string>('');
+  const [testResult, setTestResult] = useState<{ eligible: boolean; motifs: string[] } | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [elevesList, setElevesList] = useState<{ id: string; nom: string; prenom: string }[]>([]);
+  const [loadingEleves, setLoadingEleves] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+
+  const {
+    parametres,
+    loading,
+    updateActif,
+    updateConditions,
+    refresh,
+  } = useParametreBlocageBulletins(etablissementId);
+
+  // Charger les paramètres actuels
+  useEffect(() => {
+    if (parametres) {
+      setActif(parametres.actif);
+      setConditions(parametres.conditions);
+    }
+  }, [parametres]);
+
+  // Charger la liste des élèves pour le testeur
+  useEffect(() => {
+    loadEleves();
+  }, [etablissementId]);
+
+  const loadEleves = async () => {
+    setLoadingEleves(true);
+    try {
+      const { data: eleves } = await supabase
+        .from('eleves')
+        .select(`
+          id,
+          user_id,
+          profiles:user_id (nom, prenom)
+        `)
+        .eq('etablissement_id', etablissementId)
+        .eq('statut', 'actif')
+        .limit(100);
+
+      if (eleves) {
+        setElevesList(eleves.map(e => ({
+          id: e.id,
+          nom: (e.profiles as any)?.nom || 'Inconnu',
+          prenom: (e.profiles as any)?.prenom || 'Inconnu',
+        })));
+      }
+    } catch (error) {
+      console.error('Erreur chargement élèves:', error);
+    } finally {
+      setLoadingEleves(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const successConditions = await updateConditions(conditions);
+      if (successConditions) {
+        const successActif = await updateActif(actif);
+        if (successActif) {
+          Alert.alert('Succès', 'Paramètres enregistrés avec succès');
+        } else {
+          Alert.alert('Erreur', 'Impossible de modifier l\'état du blocage');
+        }
+      } else {
+        Alert.alert('Erreur', 'Impossible d\'enregistrer les conditions');
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleToggleActif = (value: boolean) => {
+    setActif(value);
+  };
+
+  const handleConditionChange = (key: keyof typeof conditions, value: boolean) => {
+    setConditions(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleSelectEleve = (eleveId: string, eleveNom: string) => {
+    setTestEleveId(eleveId);
+    setTestEleveNom(eleveNom);
+    setModalVisible(false);
+    setTestResult(null);
+  };
+
+  const handleTest = async () => {
+    if (!testEleveId.trim()) {
+      Alert.alert('Information', 'Veuillez sélectionner un élève');
+      return;
+    }
+    
+    setTestLoading(true);
+    try {
+      // Récupérer l'année scolaire active
+      const { data: anneeData } = await supabase
+        .from('annees_scolaires')
+        .select('id')
+        .eq('is_active', true)
+        .single();
+      
+      if (!anneeData) {
+        Alert.alert('Erreur', 'Aucune année scolaire active trouvée');
+        return;
+      }
+
+      // Appeler la fonction RPC avec l'année scolaire
+      const { data, error } = await supabase
+        .rpc('is_eleve_eligible_bulletin', {
+          p_eleve_id: testEleveId,
+          p_annee_scolaire_id: anneeData.id,
+        });
+
+      if (error) throw error;
+      
+      setTestResult({
+        eligible: data?.eligible ?? true,
+        motifs: data?.motifs ?? [],
+      });
+    } catch (error) {
+      console.error('Erreur test:', error);
+      Alert.alert('Erreur', 'Impossible de tester l\'éligibilité');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const getSelectedEleveDisplayName = () => {
+    if (!testEleveId) return 'Sélectionner un élève';
+    const eleve = elevesList.find(e => e.id === testEleveId);
+    if (eleve) return `${eleve.prenom} ${eleve.nom}`;
+    return 'Sélectionner un élève';
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary.DEFAULT} />
+        <Text style={styles.loadingText}>Chargement des paramètres...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* Section Activation */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🔒 Blocage des bulletins</Text>
+        <View style={styles.switchRow}>
+          <View style={styles.switchInfo}>
+            <Text style={styles.switchLabel}>Bloquer les bulletins pour les élèves non à jour</Text>
+            <Text style={styles.switchDescription}>
+              {actif 
+                ? 'Le blocage est actif. Seuls les élèves éligibles peuvent générer leur bulletin.'
+                : 'Le blocage est inactif. Tous les élèves peuvent générer leur bulletin.'}
+            </Text>
+          </View>
+          <Switch
+            value={actif}
+            onValueChange={handleToggleActif}
+            trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+            thumbColor={actif ? '#FFFFFF' : '#9CA3AF'}
+          />
+        </View>
+      </View>
+
+      {/* Section Conditions */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>📋 Conditions d'éligibilité</Text>
+        <Text style={styles.cardDescription}>
+          Un élève doit remplir TOUTES les conditions sélectionnées pour être éligible.
+        </Text>
+
+        <View style={styles.conditionItem}>
+          <View style={styles.conditionInfo}>
+            <View style={styles.conditionHeader}>
+              <Wallet size={16} color={conditions.frais_scolarite ? theme.colors.primary.DEFAULT : '#6B7280'} />
+              <Text style={styles.conditionLabel}>Frais de scolarité à jour</Text>
+            </View>
+            <Text style={styles.conditionDescription}>
+              L'élève ne doit avoir aucune facture impayée
+            </Text>
+          </View>
+          <Switch
+            value={conditions.frais_scolarite}
+            onValueChange={(val) => handleConditionChange('frais_scolarite', val)}
+            trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+            thumbColor={conditions.frais_scolarite ? '#FFFFFF' : '#9CA3AF'}
+          />
+        </View>
+
+        <View style={styles.conditionItem}>
+          <View style={styles.conditionInfo}>
+            <View style={styles.conditionHeader}>
+              <FileCheck size={16} color={conditions.inscription_validee ? theme.colors.primary.DEFAULT : '#6B7280'} />
+              <Text style={styles.conditionLabel}>Inscription validée</Text>
+            </View>
+            <Text style={styles.conditionDescription}>
+              L'inscription de l'élève doit avoir le statut "validée"
+            </Text>
+          </View>
+          <Switch
+            value={conditions.inscription_validee}
+            onValueChange={(val) => handleConditionChange('inscription_validee', val)}
+            trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+            thumbColor={conditions.inscription_validee ? '#FFFFFF' : '#9CA3AF'}
+          />
+        </View>
+
+        <View style={styles.conditionItem}>
+          <View style={styles.conditionInfo}>
+            <View style={styles.conditionHeader}>
+              <GraduationCap size={16} color={conditions.documents_administratifs ? theme.colors.primary.DEFAULT : '#6B7280'} />
+              <Text style={styles.conditionLabel}>Documents administratifs complets</Text>
+            </View>
+            <Text style={styles.conditionDescription}>
+              Tous les documents requis doivent être fournis et validés
+            </Text>
+          </View>
+          <Switch
+            value={conditions.documents_administratifs}
+            onValueChange={(val) => handleConditionChange('documents_administratifs', val)}
+            trackColor={{ false: '#E5E7EB', true: theme.colors.primary.DEFAULT }}
+            thumbColor={conditions.documents_administratifs ? '#FFFFFF' : '#9CA3AF'}
+          />
+        </View>
+      </View>
+
+      {/* Section Test */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🧪 Tester l'éligibilité d'un élève</Text>
+        <Text style={styles.cardDescription}>
+          Sélectionnez un élève pour vérifier s'il est éligible selon les conditions actuelles.
+        </Text>
+
+        <View style={styles.testInputContainer}>
+          <Text style={styles.testLabel}>Élève :</Text>
+          
+          {/* Sélecteur personnalisé avec modal */}
+          <TouchableOpacity 
+            style={styles.selectorButton} 
+            onPress={() => setModalVisible(true)}
+          >
+            <Text style={styles.selectorText}>{getSelectedEleveDisplayName()}</Text>
+            <ChevronDown size={16} color="#6B7280" />
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.testButton, (!testEleveId || testLoading) && styles.testButtonDisabled]} 
+            onPress={handleTest} 
+            disabled={!testEleveId || testLoading}
+          >
+            {testLoading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.testButtonText}>Tester l'éligibilité</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {testResult && (
+          <View style={[styles.testResult, testResult.eligible ? styles.testResultSuccess : styles.testResultError]}>
+            <View style={styles.testResultHeader}>
+              {testResult.eligible ? (
+                <CheckCircle size={20} color="#10B981" />
+              ) : (
+                <AlertTriangle size={20} color="#D97706" />
+              )}
+              <Text style={[styles.testResultTitle, testResult.eligible ? styles.testResultTitleSuccess : styles.testResultTitleError]}>
+                {testResult.eligible ? 'Élève éligible' : 'Élève non éligible'}
+              </Text>
+            </View>
+            {!testResult.eligible && testResult.motifs.length > 0 && (
+              <View style={styles.testResultMotifs}>
+                <Text style={styles.testResultMotifsTitle}>Motif(s) :</Text>
+                {testResult.motifs.map((motif, idx) => (
+                  <Text key={idx} style={styles.testResultMotifText}>• {motif}</Text>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
+        {loadingEleves && (
+          <View style={styles.loadingElevesContainer}>
+            <ActivityIndicator size="small" color={theme.colors.primary.DEFAULT} />
+            <Text style={styles.loadingElevesText}>Chargement de la liste des élèves...</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Note importante */}
+      <View style={styles.noteCard}>
+        <Text style={styles.noteTitle}>ℹ️ Note importante</Text>
+        <Text style={styles.noteText}>
+          • Les modifications sont appliquées immédiatement après enregistrement.
+          {'\n'}• Un élève doit remplir TOUTES les conditions sélectionnées pour être éligible.
+          {'\n'}• Les élèves non éligibles verront le bouton "Générer bulletin" désactivé.
+        </Text>
+      </View>
+
+      {/* Boutons d'action */}
+      <View style={styles.footer}>
+        <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={isSaving}>
+          {isSaving ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <>
+              <Save size={18} color="#FFFFFF" />
+              <Text style={styles.saveButtonText}>Enregistrer</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* Modal de sélection des élèves */}
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Sélectionner un élève</Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={elevesList}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.modalOption,
+                    testEleveId === item.id && styles.modalOptionActive,
+                  ]}
+                  onPress={() => handleSelectEleve(item.id, `${item.prenom} ${item.nom}`)}
+                >
+                  <Text style={[
+                    styles.modalOptionText,
+                    testEleveId === item.id && styles.modalOptionTextActive,
+                  ]}>
+                    {item.prenom} {item.nom}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.modalEmpty}>
+                  <Text style={styles.modalEmptyText}>Aucun élève trouvé</Text>
+                </View>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  loadingContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  cardDescription: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 16,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  switchInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  switchLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  switchDescription: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  conditionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  conditionInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  conditionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  conditionLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+  },
+  conditionDescription: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginLeft: 24,
+  },
+  testInputContainer: {
+    marginTop: 8,
+  },
+  testLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  selectorButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  selectorText: {
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  testButton: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  testButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  testButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  testResult: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 8,
+  },
+  testResultSuccess: {
+    backgroundColor: '#D1FAE5',
+  },
+  testResultError: {
+    backgroundColor: '#FEF3C7',
+  },
+  testResultHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  testResultTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  testResultTitleSuccess: {
+    color: '#10B981',
+  },
+  testResultTitleError: {
+    color: '#D97706',
+  },
+  testResultMotifs: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.1)',
+  },
+  testResultMotifsTitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#92400E',
+    marginBottom: 4,
+  },
+  testResultMotifText: {
+    fontSize: 11,
+    color: '#92400E',
+    marginBottom: 2,
+  },
+  loadingElevesContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 16,
+    paddingVertical: 12,
+  },
+  loadingElevesText: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  noteCard: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  noteTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 8,
+  },
+  noteText: {
+    fontSize: 12,
+    color: '#1E40AF',
+    lineHeight: 18,
+  },
+  footer: {
+    marginBottom: 32,
+  },
+  saveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.primary.DEFAULT,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  saveButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '85%',
+    maxHeight: '70%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  modalClose: {
+    fontSize: 18,
+    color: '#6B7280',
+    padding: 4,
+  },
+  modalOption: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  modalOptionActive: {
+    backgroundColor: '#EFF6FF',
+  },
+  modalOptionText: {
+    fontSize: 15,
+    color: '#1F2937',
+  },
+  modalOptionTextActive: {
+    color: theme.colors.primary.DEFAULT,
+    fontWeight: '500',
+  },
+  modalEmpty: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  modalEmptyText: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+});

@@ -1,0 +1,500 @@
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  TextInput,
+  Switch,
+} from 'react-native';
+import { useAuth } from '@/contexts/AuthContext';
+import { Card } from '@/components/Card';
+import { Button } from '@/components/Button';
+import theme from '@/constants/theme';
+import { Megaphone, Send, Users, UserCheck, School, Eye, Edit2, Trash2 } from 'lucide-react-native';
+
+// Données mockées
+const MOCK_ANNONCES = [
+  {
+    id: '1',
+    titre: 'Réunion parents-enseignants',
+    contenu: 'La réunion trimestrielle aura lieu le samedi 15 mai à 10h. Merci de confirmer votre présence.',
+    date: '2026-04-20',
+    auteur: 'Direction',
+    cibles: ['parents', 'enseignants'],
+    statut: 'Publiée',
+  },
+  {
+    id: '2',
+    titre: 'Fermeture exceptionnelle',
+    contenu: 'L’établissement sera fermé le lundi 1er mai pour cause de fête du travail.',
+    date: '2026-04-25',
+    auteur: 'Direction',
+    cibles: ['parents', 'enseignants', 'eleves'],
+    statut: 'Publiée',
+  },
+  {
+    id: '3',
+    titre: 'Nouveau règlement intérieur',
+    contenu: 'Le nouveau règlement intérieur est disponible. Veuillez en prendre connaissance.',
+    date: '2026-04-26',
+    auteur: 'Direction',
+    cibles: ['enseignants', 'eleves'],
+    statut: 'Brouillon',
+  },
+];
+
+const CIBLES = [
+  { id: 'eleves', label: 'Élèves', icon: Users },
+  { id: 'parents', label: 'Parents', icon: UserCheck },
+  { id: 'enseignants', label: 'Enseignants', icon: School },
+];
+
+export default function CommunicationOfficielleScreen() {
+  const { user, profile, activeEtablissement } = useAuth();
+  const [annonces, setAnnonces] = useState(MOCK_ANNONCES);
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState({
+    titre: '',
+    contenu: '',
+    cibles: [] as string[],
+  });
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const handleToggleCible = (cibleId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      cibles: prev.cibles.includes(cibleId)
+        ? prev.cibles.filter(c => c !== cibleId)
+        : [...prev.cibles, cibleId],
+    }));
+  };
+
+  const handleSubmit = () => {
+    if (!formData.titre.trim() || !formData.contenu.trim() || formData.cibles.length === 0) {
+      Alert.alert('Information', 'Veuillez remplir tous les champs et sélectionner au moins une cible.');
+      return;
+    }
+
+    const newAnnonce = {
+      id: Date.now().toString(),
+      titre: formData.titre,
+      contenu: formData.contenu,
+      date: new Date().toISOString().split('T')[0],
+      auteur: profile?.prenom && profile?.nom ? `${profile.prenom} ${profile.nom}` : 'Direction',
+      cibles: formData.cibles,
+      statut: 'Brouillon',
+    };
+
+    if (editingId) {
+      setAnnonces(prev => prev.map(a => a.id === editingId ? { ...newAnnonce, id: editingId } : a));
+    } else {
+      setAnnonces(prev => [newAnnonce, ...prev]);
+    }
+
+    resetForm();
+    Alert.alert('Succès', 'L\'annonce a été enregistrée avec succès.');
+  };
+
+  const resetForm = () => {
+    setFormData({ titre: '', contenu: '', cibles: [] });
+    setEditingId(null);
+    setShowForm(false);
+  };
+
+  const handleEdit = (annonce: any) => {
+    setFormData({
+      titre: annonce.titre,
+      contenu: annonce.contenu,
+      cibles: annonce.cibles,
+    });
+    setEditingId(annonce.id);
+    setShowForm(true);
+  };
+
+  const handleDelete = (id: string) => {
+    Alert.alert(
+      'Confirmation',
+      'Voulez-vous vraiment supprimer cette annonce ?',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: () => setAnnonces(prev => prev.filter(a => a.id !== id)),
+        },
+      ]
+    );
+  };
+
+  const handlePublish = (id: string) => {
+    setAnnonces(prev => prev.map(a =>
+      a.id === id ? { ...a, statut: 'Publiée' } : a
+    ));
+    Alert.alert('Succès', 'L\'annonce a été publiée. Les notifications ont été envoyées.');
+  };
+
+  const getCiblesLabels = (cibles: string[]) => {
+    return cibles.map(c => {
+      switch(c) {
+        case 'eleves': return 'Élèves';
+        case 'parents': return 'Parents';
+        case 'enseignants': return 'Enseignants';
+        default: return c;
+      }
+    }).join(', ');
+  };
+
+  const getStatutStyle = (statut: string) => {
+    return statut === 'Publiée'
+      ? { backgroundColor: theme.colors.success.DEFAULT + '20', color: theme.colors.success.DEFAULT }
+      : { backgroundColor: theme.colors.neutral[200], color: theme.colors.neutral[600] };
+  };
+
+  return (
+    <View style={styles.container}>
+      {/* En-tête */}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Megaphone size={28} color={theme.colors.primary.DEFAULT} />
+          <View>
+            <Text style={styles.title}>Communication officielle</Text>
+            <Text style={styles.subtitle}>
+              {activeEtablissement?.nom || 'Établissement'} – Annonces institutionnelles
+            </Text>
+          </View>
+        </View>
+        <Button
+          title="Nouvelle annonce"
+          onPress={() => setShowForm(true)}
+          variant="primary"
+          size="small"
+        />
+      </View>
+
+      {/* Formulaire d'ajout/modification */}
+      {showForm && (
+        <Card style={styles.formCard}>
+          <View style={styles.formHeader}>
+            <Text style={styles.formTitle}>
+              {editingId ? 'Modifier l\'annonce' : 'Nouvelle annonce'}
+            </Text>
+            <TouchableOpacity onPress={resetForm}>
+              <Text style={styles.formClose}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Titre de l'annonce"
+            placeholderTextColor={theme.colors.neutral[400]}
+            value={formData.titre}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, titre: text }))}
+          />
+
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            placeholder="Contenu de l'annonce"
+            placeholderTextColor={theme.colors.neutral[400]}
+            multiline
+            numberOfLines={6}
+            textAlignVertical="top"
+            value={formData.contenu}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, contenu: text }))}
+          />
+
+          <Text style={styles.ciblesLabel}>Public cible :</Text>
+          <View style={styles.ciblesContainer}>
+            {CIBLES.map((cible) => {
+              const Icon = cible.icon;
+              const isSelected = formData.cibles.includes(cible.id);
+              return (
+                <TouchableOpacity
+                  key={cible.id}
+                  style={[styles.cibleChip, isSelected && styles.cibleChipSelected]}
+                  onPress={() => handleToggleCible(cible.id)}
+                >
+                  <Icon size={16} color={isSelected ? '#FFFFFF' : theme.colors.neutral[600]} />
+                  <Text style={[styles.cibleChipText, isSelected && styles.cibleChipTextSelected]}>
+                    {cible.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={styles.formActions}>
+            <Button title="Annuler" onPress={resetForm} variant="secondary" style={styles.formButton} />
+            <Button title={editingId ? 'Mettre à jour' : 'Enregistrer'} onPress={handleSubmit} variant="primary" style={styles.formButton} />
+          </View>
+        </Card>
+      )}
+
+      {/* Liste des annonces */}
+      <ScrollView style={styles.listContent} showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionTitle}>Annonces</Text>
+        {annonces.map((annonce) => (
+          <Card key={annonce.id} style={styles.annonceCard}>
+            <View style={styles.annonceHeader}>
+              <View style={styles.annonceTitleContainer}>
+                <Text style={styles.annonceTitre}>{annonce.titre}</Text>
+                <View style={[styles.statutBadge, { backgroundColor: getStatutStyle(annonce.statut).backgroundColor }]}>
+                  <Text style={[styles.statutText, { color: getStatutStyle(annonce.statut).color }]}>
+                    {annonce.statut}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.annonceActions}>
+                <TouchableOpacity onPress={() => handleEdit(annonce)} style={styles.actionButton}>
+                  <Edit2 size={18} color={theme.colors.neutral[500]} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleDelete(annonce.id)} style={styles.actionButton}>
+                  <Trash2 size={18} color={theme.colors.danger.DEFAULT} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <Text style={styles.annonceContenu}>{annonce.contenu}</Text>
+
+            <View style={styles.annonceFooter}>
+              <View style={styles.ciblesList}>
+                {annonce.cibles.map((cible) => (
+                  <View key={cible} style={styles.cibleTag}>
+                    <Text style={styles.cibleTagText}>
+                      {cible === 'eleves' ? '🎓 Élèves' : cible === 'parents' ? '👨‍👩‍👧 Parents' : '👨‍🏫 Enseignants'}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.annonceMeta}>
+                <Text style={styles.annonceDate}>📅 {annonce.date}</Text>
+                <Text style={styles.annonceAuteur}>👤 {annonce.auteur}</Text>
+              </View>
+            </View>
+
+            {annonce.statut === 'Brouillon' && (
+              <TouchableOpacity
+                style={styles.publishButton}
+                onPress={() => handlePublish(annonce.id)}
+              >
+                <Send size={16} color="#FFFFFF" />
+                <Text style={styles.publishButtonText}>Publier</Text>
+              </TouchableOpacity>
+            )}
+          </Card>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.background.secondary,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing[6],
+    paddingTop: theme.spacing[6],
+    paddingBottom: theme.spacing[4],
+    backgroundColor: theme.colors.background.primary,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.neutral[200],
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[3],
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: theme.colors.neutral[800],
+  },
+  subtitle: {
+    fontSize: 13,
+    color: theme.colors.neutral[500],
+  },
+  formCard: {
+    margin: theme.spacing[4],
+    padding: theme.spacing[4],
+  },
+  formHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: theme.spacing[4],
+  },
+  formTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: theme.colors.neutral[800],
+  },
+  formClose: {
+    fontSize: 20,
+    color: theme.colors.neutral[500],
+    padding: 4,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: theme.colors.neutral[200],
+    borderRadius: 10,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[3],
+    fontSize: 14,
+    color: theme.colors.neutral[800],
+    marginBottom: theme.spacing[3],
+  },
+  textArea: {
+    minHeight: 100,
+  },
+  ciblesLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.colors.neutral[700],
+    marginBottom: theme.spacing[2],
+  },
+  ciblesContainer: {
+    flexDirection: 'row',
+    gap: theme.spacing[2],
+    marginBottom: theme.spacing[4],
+  },
+  cibleChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: theme.colors.neutral[100],
+    borderWidth: 1,
+    borderColor: theme.colors.neutral[200],
+  },
+  cibleChipSelected: {
+    backgroundColor: theme.colors.primary.DEFAULT,
+    borderColor: theme.colors.primary.DEFAULT,
+  },
+  cibleChipText: {
+    fontSize: 13,
+    color: theme.colors.neutral[600],
+  },
+  cibleChipTextSelected: {
+    color: '#FFFFFF',
+  },
+  formActions: {
+    flexDirection: 'row',
+    gap: theme.spacing[3],
+  },
+  formButton: {
+    flex: 1,
+  },
+  listContent: {
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[6],
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: theme.colors.neutral[700],
+    marginBottom: theme.spacing[3],
+    marginTop: theme.spacing[2],
+  },
+  annonceCard: {
+    marginBottom: theme.spacing[3],
+    padding: theme.spacing[4],
+  },
+  annonceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: theme.spacing[3],
+  },
+  annonceTitleContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[2],
+    flexWrap: 'wrap',
+  },
+  annonceTitre: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: theme.colors.neutral[800],
+  },
+  statutBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  statutText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  annonceActions: {
+    flexDirection: 'row',
+    gap: theme.spacing[2],
+  },
+  actionButton: {
+    padding: 6,
+  },
+  annonceContenu: {
+    fontSize: 14,
+    color: theme.colors.neutral[600],
+    lineHeight: 20,
+    marginBottom: theme.spacing[3],
+  },
+  annonceFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: theme.spacing[2],
+  },
+  ciblesList: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  cibleTag: {
+    backgroundColor: theme.colors.neutral[100],
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  cibleTagText: {
+    fontSize: 11,
+    color: theme.colors.neutral[600],
+  },
+  annonceMeta: {
+    flexDirection: 'row',
+    gap: theme.spacing[3],
+  },
+  annonceDate: {
+    fontSize: 11,
+    color: theme.colors.neutral[400],
+  },
+  annonceAuteur: {
+    fontSize: 11,
+    color: theme.colors.neutral[400],
+  },
+  publishButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.success.DEFAULT,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: theme.spacing[3],
+  },
+  publishButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+});

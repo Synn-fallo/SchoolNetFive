@@ -1,0 +1,9 @@
+{
+  "imports": {
+    "https://deno.land/": "https://deno.land/"
+  },
+  "compilerOptions": {
+    "allowJs": false,
+    "lib": ["deno.window"]
+  }
+}
