@@ -1,9 +1,4 @@
-/**
- * @license
- * SchoolNet Identity Guidelines & Design System v2.0
- * Composant : EtablissementCard.tsx (Refonte Moderne Bleu Électrique)
- */
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { 
   View, 
   Text, 
@@ -11,650 +6,609 @@ import {
   Image, 
   StyleSheet, 
   Dimensions, 
-  Animated, 
-  Alert, 
-  Linking, 
-  Platform 
+  Share,
+  Platform
 } from 'react-native';
-// Icônes standardisées et optimisées du package lucide-react-native
 import { 
   MapPin, 
-  ChevronRight, 
-  Share2, 
   TrendingUp, 
-  GraduationCap, 
-  Wrench, 
-  Eye, 
   Heart, 
-  Building2, 
+  Eye, 
+  GraduationCap, 
   Award, 
-  Key, 
-  LogIn 
+  ChevronRight, 
+  Copy,
+  Check,
+  Sparkles
 } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
 
-const { width } = Dimensions.get('window');
-
-// CHARTE GRAPHIQUE SCHOOLNET CONFORME RECOMMANDATIONS
-const BRAND = {
-  primary: '#2563EB',       // Bleu électrique de marque (confort oculaire optimal)
-  primaryDark: '#1D4ED8',   // Bleu moyen de contraste
-  secondary: '#0EA5E9',     // Bleu ciel d'accents
-  success: '#10B981',       // Vert émeraude de réussite
-  alert: '#F59E0B',         // Orange/Ambré premium
-  successBg: '#ECFDF5',     // Fond de badge vert clair
-  neutralBg: '#F9FAFB',     // Gris perle ultra-pro
-  neutralBorder: '#E5E7EB', // Bordure neutre légère
-  textMain: '#1F2937',      // Anthracite principal
-  textMuted: '#4B5563',     // Gris secondaire lisible
+// --- Fonction utilitaire pour parser les JSON arrays ---
+const parseJsonArray = (data: string | null | undefined): string[] => {
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
+  } catch (error) {
+    // Fallback pour données legacy ou erreurs
+    console.warn('parseJsonArray error:', error);
+    return [];
+  }
 };
 
 export interface EtablissementCardProps {
-  id?: string;
-  nom?: string;
-  name?: string;               // Tolérance d'attribut si le parent transmet 'name'
+  id: string;
+  name: string;
+  logoUrl?: string;
+  coverUrl?: string;
   slug?: string;
-  ville?: string | null;
-  region?: string | null;
-  departement?: string | null;
-  type_affichage?: string | null;
-  logo_url?: string | null;
-  logoUrl?: string | null;     // Tolérance camelCase
-  taux_reussite?: number | null;
-  reussite?: number | null;     // Tolérance clé alternative
-  likes_count?: number;
-  likes?: number;               // Tolérance clé alternative
-  vues_count?: number;
-  views?: number;               // Tolérance clé alternative
-  note_moyenne?: number;
-  badge_annuaire?: string | null;
-  badge?: string | null;       // Tolérance clé alternative
-  cycles?: string | null;
-  options?: string | null;
-  description_courte?: string | null;
-  etoiles?: string;
-  code_etablissement?: string | null;
-  code?: string | null;         // Tolérance clé alternative
-  onPress?: () => void;
-  onQuickView?: () => void;
+  address?: string;
+  quarter?: string;
+  city?: string;
+  department?: string;
+  successRate?: number;
+  likes?: number;
+  views?: number;
+  cycles?: string;        // Maintenant: JSON string '["premier", "second"]'
+  directAccessCode?: string;
+  specialities?: string;  // Même format JSON si applicable
+  description?: string;
+  onPressVitrine?: (id: string, slug?: string) => void;
+  onPressRegister?: (id: string) => void;
+  onLikePress?: (id: string) => void;
 }
 
-const formatNumber = (num?: number): string => {
-  if (!num) return '0';
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1) + 'k';
-  }
-  return num.toString();
-};
-
-const getInitiales = (nom: string): string => {
-  if (!nom) return 'SN';
-  const mots = nom.trim().split(' ');
-  if (mots.length >= 2) {
-    return (mots[0][0] + mots[mots.length - 1][0]).toUpperCase();
-  }
-  return nom.substring(0, 2).toUpperCase();
-};
-
-const getBadgeStyles = (badge?: string | null) => {
-  switch (badge) {
-    case 'Prestige':
-      return { bg: '#FEF3C7', text: '#B45309', border: '#FDE68A' }; // Orange chaud de prestige
-    case 'Premium':
-      return { bg: '#EFF6FF', text: '#2563EB', border: '#BFDBFE' }; // Bleu électrique pro
-    default:
-      return { bg: '#F3F4F6', text: '#4B5563', border: '#E5E7EB' }; // Standard badges
-  }
-};
-
-export default function EtablissementCard(props: EtablissementCardProps) {
-  const {
-    nom,
-    name,
-    ville,
-    region,
-    departement,
-    type_affichage,
-    logo_url,
-    logoUrl,
-    taux_reussite,
-    reussite,
-    likes_count,
-    likes,
-    vues_count,
-    views,
-    note_moyenne,
-    badge_annuaire,
-    badge,
-    cycles,
-    options,
-    description_courte,
-    etoiles,
-    code_etablissement,
-    code,
-    slug,
-    onPress,
-    onQuickView,
-  } = props;
+export default function EtablissementCard({
+  id,
+  name,
+  logoUrl,
+  coverUrl,
+  slug,
+  address,
+  quarter,
+  city,
+  department,
+  successRate = 0,
+  likes = 0,
+  views = 0,
+  cycles,
+  directAccessCode,
+  specialities,
+  description,
+  onPressVitrine,
+  onPressRegister,
+  onLikePress
+}: EtablissementCardProps) {
   
-  let router: any;
-  try {
-    router = useRouter();
-  } catch (error) {
-    router = null;
-  }
-  
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-  const [showShareMenu, setShowShareMenu] = useState(false);
+  const [hasLiked, setHasLiked] = useState(false);
+  const [localLikes, setLocalLikes] = useState(likes);
+  const [copied, setCopied] = useState(false);
 
-  // Maintien structurel résilient face à l'hétérogénéité des données parentes
-  const activeNom = nom || name || "Nom d'établissement";
-  const activeLogoUrl = logo_url || logoUrl;
-  const activeTauxReussite = taux_reussite !== undefined && taux_reussite !== null ? taux_reussite : (reussite !== undefined ? reussite : null);
-  const activeLikesCount = likes_count !== undefined ? likes_count : (likes || 0);
-  const activeVuesCount = vues_count !== undefined ? vues_count : (views || 0);
-  const activeBadge = badge_annuaire || badge;
-  const activeCode = code_etablissement || code;
+  // Parser les JSON arrays
+  const cyclesArray = parseJsonArray(cycles);
+  const specialitiesArray = parseJsonArray(specialities);
 
-  const hasLogo = !!activeLogoUrl;
-  const initiales = getInitiales(activeNom);
-  const badgeColors = getBadgeStyles(activeBadge);
-
-  const locationParts = [ville, departement, region].filter(Boolean);
-  const locationString = locationParts.join(' • ') || 'Secteur Non Spécifié';
-
-  const cleanCycles = cycles ? cycles.replace(/"/g, '').split(',').map(c => c.trim()).join(', ') : null;
-  const cleanOptions = options ? options.replace(/"/g, '').split(',').map(o => o.trim().toUpperCase()).join(', ') : null;
-
-  const handlePressIn = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 0.97, // Légère réaction physique vibrante au touché
-      useNativeDriver: true,
-      tension: 110,
-      friction: 8
-    }).start();
-  };
-
-  const handlePressOut = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 1,
-      useNativeDriver: true,
-      tension: 110,
-      friction: 8
-    }).start();
-  };
-
-  // Traitement robuste de l'action d'inscription directe
-  const handleInscrire = () => {
-    if (!activeCode) {
-      Alert.alert(
-        'Code indisponible', 
-        "Ce code d'inscription n'est pas encore assigné. Veuillez contacter l'administration de l'établissement."
-      );
-      return;
-    }
-    const targetUrl = `/auto-inscription?code=${activeCode}`;
-    
-    // Traitement Environnement Web (Navigateur)
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (router && typeof router.push === 'function') {
-        try {
-          router.push(targetUrl);
-          return;
-        } catch (e) {}
-      }
-      window.location.href = targetUrl;
-      return;
-    }
-    
-    // Traitement natif Expo / React Native
-    if (router && typeof router.push === 'function') {
-      try {
-        router.push(targetUrl);
-      } catch (e) {
-        Linking.openURL(`schoolnet://${targetUrl}`).catch(() => {});
-      }
+  // Gérer le clic sur le bouton J'aime
+  const handleLike = () => {
+    if (onLikePress) {
+      onLikePress(id);
     } else {
-      Linking.openURL(`schoolnet://${targetUrl}`).catch(() => {
-        Alert.alert('Information', "Page d'inscription directe accessible par le menu de l'application.");
-      });
+      if (hasLiked) {
+        setLocalLikes(prev => prev - 1);
+        setHasLiked(false);
+      } else {
+        setLocalLikes(prev => prev + 1);
+        setHasLiked(true);
+      }
     }
   };
 
-  // Traitement robuste de l'accès à la Vitrine avec repli failsafe
-  const handleQuickViewPress = () => {
-    if (onQuickView) {
-      onQuickView();
-      return;
-    }
-    
-    const targetUrl = `/etablissements/${slug || 'school'}`;
-    
-    // Traitement Environnement Web (Navigateur)
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (router && typeof router.push === 'function') {
-        try {
-          router.push(targetUrl);
-          return;
-        } catch (e) {}
-      }
-      window.location.href = targetUrl;
-      return;
-    }
-    
-    // Traitement natif Expo / React Native
-    if (router && typeof router.push === 'function') {
-      try {
-        router.push(targetUrl);
-      } catch (e) {
-        Linking.openURL(`schoolnet://${targetUrl}`).catch(() => {});
-      }
-    } else {
-      Linking.openURL(`schoolnet://${targetUrl}`).catch(() => {
-        Alert.alert('Vitrine', "Ouverture de la vitrine de l'école momentanément indisponible.");
+  // Gérer le partage
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: `Découvrez l'établissement ${name} sur SchoolNet !`,
+        title: name,
       });
+    } catch (error) {
+      console.log('Erreur de partage :', error);
     }
+  };
+
+  // Formatter les nombres compacts (ex: 1200 -> 1.2k)
+  const formatCompact = (num: number): string => {
+    if (num >= 1000) {
+      return (num / 1000).toFixed(1) + 'k';
+    }
+    return num.toString();
   };
 
   return (
-    <Animated.View 
-      style={[
-        styles.cardContainer, 
-        { transform: [{ scale: scaleAnim }] }
-      ]}
-    >
-      <TouchableOpacity
-        onPress={onPress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        activeOpacity={0.95}
-        style={styles.touchableArea}
-      >
-        <View style={styles.innerLayout}>
+    <View style={styles.cardContainer} id={`school-card-${id}`}>
+      
+      {/* 1. Header & Cover Image avec Dégradé */}
+      <View style={styles.coverWrapper}>
+        {coverUrl ? (
+          <Image 
+            source={{ uri: coverUrl }} 
+            style={styles.coverImage}
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <View style={styles.coverPlaceholder} />
+        )}
+        <View style={styles.coverOverlay} />
+
+        <View style={styles.premiumBadge}>
+          <Award size={10} color="#D97706" style={styles.premiumIcon} />
+          <Text style={styles.premiumBadgeText}>PRESTIGE ÉLITE</Text>
+        </View>
+
+        <View style={styles.systemTag}>
+          <Sparkles size={8} color="#FBBF24" />
+          <Text style={styles.systemTagText}>Établissement Agréé</Text>
+        </View>
+      </View>
+
+      {/* 2. Contenu Principal de la Carte */}
+      <View style={styles.cardBody}>
+        
+        <View style={styles.avatarRow}>
+          <View style={styles.logoFrame}>
+            {logoUrl ? (
+              <Image 
+                source={{ uri: logoUrl }} 
+                style={styles.logoImage}
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <View style={styles.logoPlaceholder}>
+                <Text style={styles.logoPlaceholderText}>
+                  {name ? name.substring(0, 2).toUpperCase() : 'SN'}
+                </Text>
+              </View>
+            )}
+          </View>
           
-          {/* Badge d'annuaire (Prestige / Premium homologué) */}
-          {activeBadge && (
-            <View 
-              style={[
-                styles.badgeCorner, 
-                { 
-                  backgroundColor: badgeColors.bg, 
-                  borderColor: badgeColors.border 
-                }
-              ]}
-            >
-              <Award size={10} color={badgeColors.text} style={styles.awardIcon} />
-              <Text style={[styles.badgeCornerText, { color: badgeColors.text }]}>
-                {activeBadge}
-              </Text>
+          <View style={styles.ratingContainer}>
+            <View style={styles.starsRow}>
+              <Sparkles size={10} color="#F59E0B" style={styles.starFill} />
+              <Sparkles size={10} color="#F59E0B" style={styles.starFill} />
+              <Sparkles size={10} color="#F59E0B" style={styles.starFill} />
+              <Sparkles size={10} color="#F59E0B" style={styles.starFill} />
+              <Sparkles size={10} color="#F59E0B" style={styles.starFill} />
+            </View>
+            <Text style={styles.ratingText}>4.8 (120 avis)</Text>
+          </View>
+        </View>
+
+        <Text style={styles.schoolName} numberOfLines={2}>
+          {name || "Nom de l'établissement"}
+        </Text>
+
+        {/* Tags d'Infrastructures & Cycles - VERSION CORRIGÉE */}
+        <View style={styles.tagsContainer}>
+          {cyclesArray.map((cycle, index) => (
+            <View key={index} style={styles.badgeCycle}>
+              <GraduationCap size={10} color="#2563EB" />
+              <Text style={styles.badgeCycleText}>{cycle}</Text>
+            </View>
+          ))}
+          
+          {directAccessCode && (
+            <View style={styles.badgeAccessCode}>
+              <Text style={styles.badgeAccessCodeText}>Code : {directAccessCode}</Text>
             </View>
           )}
-
-          {/* En-Tête de la carte */}
-          <View style={styles.headerContainer}>
-            <View style={styles.logoWrapper}>
-              {hasLogo ? (
-                <Image source={{ uri: activeLogoUrl }} style={styles.schoolLogo} />
-              ) : (
-                <View style={styles.initialsBg}>
-                  <Text style={styles.initialsText}>{initiales}</Text>
-                </View>
-              )}
-            </View>
-            
-            <View style={styles.ratingBox}>
-              <Text style={styles.stars}>{etoiles || '★★★★☆'}</Text>
-              {note_moyenne && note_moyenne > 0 && (
-                <Text style={styles.noteRating}>{note_moyenne.toFixed(1)}/5</Text>
-              )}
-            </View>
-          </View>
-
-          {/* Corps d'information principal */}
-          <View style={styles.contentBody}>
-            <Text style={styles.schoolTitle} numberOfLines={2}>
-              {activeNom}
-            </Text>
-
-            {/* Type d'établissement */}
-            {type_affichage && (
-              <View style={styles.typeTag}>
-                <Building2 size={11} color={BRAND.primary} />
-                <Text style={styles.typeText}>{type_affichage}</Text>
-              </View>
-            )}
-
-            {/* Code d'inscription direct */}
-            {activeCode && (
-              <View style={styles.codeTag}>
-                <Key size={10} color={BRAND.success} />
-                <Text style={styles.codeText}>Accès Direct : {activeCode}</Text>
-              </View>
-            )}
-
-            {/* Localisation filtrée */}
-            <View style={styles.locationContainer}>
-              <MapPin size={11} color={BRAND.secondary} />
-              <Text style={styles.locationText} numberOfLines={1}>
-                {locationString}
-              </Text>
-            </View>
-
-            {/* Grille de métriques ergonomiques et esthétiques */}
-            <View style={styles.metricsWrapper}>
-              
-              <View style={styles.metricCard}>
-                <TrendingUp size={13} color={activeTauxReussite ? BRAND.success : BRAND.textMuted} />
-                <Text style={[styles.mValue, activeTauxReussite ? { color: BRAND.success } : null]}>
-                  {activeTauxReussite ? `${activeTauxReussite}%` : '---'}
-                </Text>
-                <Text style={styles.mLabel}>Réussite</Text>
-              </View>
-
-              <View style={styles.metricCard}>
-                <Heart size={13} color={activeLikesCount ? '#EF4444' : BRAND.textMuted} />
-                <Text style={styles.mValue}>{formatNumber(activeLikesCount)}</Text>
-                <Text style={styles.mLabel}>J'aime</Text>
-              </View>
-
-              <View style={styles.metricCard}>
-                <Eye size={13} color={BRAND.secondary} />
-                <Text style={styles.mValue}>{formatNumber(activeVuesCount)}</Text>
-                <Text style={styles.mLabel}>Vues</Text>
-              </View>
-
-              <View style={styles.metricCard}>
-                <GraduationCap size={13} color={BRAND.primary} />
-                <Text style={styles.mValue} numberOfLines={1}>
-                  {cleanCycles ? cleanCycles.split(',')[0] : 'Général'}
-                </Text>
-                <Text style={styles.mLabel}>Cycle</Text>
-              </View>
-
-            </View>
-
-            {/* Encart Options techniques si présentes */}
-            {cleanOptions && (
-              <View style={styles.optionsEncart}>
-                <Wrench size={10} color={BRAND.textMuted} />
-                <Text style={styles.optionsText} numberOfLines={1}>
-                  {cleanOptions}
-                </Text>
-              </View>
-            )}
-
-            {description_courte && (
-              <Text style={styles.descriptionText} numberOfLines={2}>
-                {description_courte}
-              </Text>
-            )}
-          </View>
-
-          {/* Pied de Carte contenant les boutons d'actions */}
-          <View style={styles.footerActions}>
-            <TouchableOpacity 
-              style={[styles.btnAction, styles.btnOutline]} 
-              onPress={() => Alert.alert('Partager', `Lien de l'établissement : https://schoolnet.bj/etablissements/${slug}`)}
-            >
-              <Share2 size={12} color={BRAND.textMuted} />
-              <Text style={styles.btnOutlineText}>Partager</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.btnAction, styles.btnSuccess]} 
-              onPress={handleInscrire}
-            >
-              <LogIn size={12} color="#FFFFFF" />
-              <Text style={styles.btnSuccessText}>S'inscrire</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.btnAction, styles.btnPrimary]} 
-              onPress={handleQuickViewPress}
-            >
-              <ChevronRight size={12} color={BRAND.primary} />
-              <Text style={styles.btnPrimaryText}>Vitrine</Text>
-            </TouchableOpacity>
-          </View>
-
         </View>
-      </TouchableOpacity>
-    </Animated.View>
+
+        {/* Adresse et géolocalisation */}
+        <View style={styles.locationContainer}>
+          <MapPin size={11} color="#2563EB" style={styles.pinIcon} />
+          <Text style={styles.locationText} numberOfLines={1}>
+            {quarter ? `${quarter}, ` : ''}{city || "Cotonou"}{department ? ` (${department})` : ''}
+          </Text>
+        </View>
+
+        {/* Métriques */}
+        <View style={styles.metricsWrapper}>
+          <View style={styles.metricItem}>
+            <TrendingUp size={12} color="#10B981" />
+            <Text style={styles.metricValue}>{successRate}%</Text>
+            <Text style={styles.metricLabel}>RÉUSSITE</Text>
+          </View>
+
+          <TouchableOpacity 
+            onPress={handleLike} 
+            activeOpacity={0.7} 
+            style={[styles.metricItem, hasLiked && styles.metricItemActive]}
+          >
+            <Heart size={12} color={hasLiked ? "#E11D48" : "#94A3B8"} fill={hasLiked ? "#E11D48" : "transparent"} />
+            <Text style={[styles.metricValue, hasLiked && styles.metricValueActive]}>
+              {formatCompact(localLikes)}
+            </Text>
+            <Text style={styles.metricLabel}>J'AIME</Text>
+          </TouchableOpacity>
+
+          <View style={styles.metricItem}>
+            <Eye size={12} color="#0EA5E9" />
+            <Text style={styles.metricValue}>{formatCompact(views)}</Text>
+            <Text style={styles.metricLabel}>VUES</Text>
+          </View>
+
+          <View style={styles.metricItem}>
+            <GraduationCap size={12} color="#4F46E5" />
+            <Text style={styles.metricValue} numberOfLines={1}>Général</Text>
+            <Text style={styles.metricLabel}>STATUT</Text>
+          </View>
+        </View>
+
+        {/* Spécialités */}
+        {specialitiesArray.length > 0 && (
+          <View style={styles.specialitiesRow}>
+            <Text style={styles.specialityBadgeText} numberOfLines={1}>
+              🔬 {specialitiesArray.join('  •  ').toUpperCase()}
+            </Text>
+          </View>
+        )}
+
+        {/* Description */}
+        {description && (
+          <Text style={styles.descriptionText} numberOfLines={2}>
+            {description}
+          </Text>
+        )}
+      </View>
+
+      {/* Footer Actions */}
+      <View style={styles.footerActions}>
+        <TouchableOpacity 
+          style={styles.actionBtnSecondary} 
+          onPress={handleShare}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.actionBtnSecondaryText}>Partager</Text>
+        </TouchableOpacity>
+
+        {onPressRegister && (
+          <TouchableOpacity 
+            style={styles.actionBtnSuccess} 
+            onPress={() => onPressRegister(id)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.actionBtnSuccessText}>S'inscrire</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity 
+          style={styles.actionBtnPrimary} 
+          onPress={() => onPressVitrine && onPressVitrine(id, slug)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.actionBtnPrimaryText}>Vitrine</Text>
+          <ChevronRight size={12} color="#FFFFFF" style={styles.arrowIcon} />
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
+// --- DESIGN DE LA CARTE MODERNISÉE (Tailwind-like shadow, smooth borders, cool contrast) ---
 const styles = StyleSheet.create({
   cardContainer: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12, // Strictement 12px approuvé par la charte SchoolNet
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: BRAND.neutralBorder,
-    shadowColor: '#1F2937',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-    marginVertical: 8,
+    borderColor: '#E2E8F0',
     overflow: 'hidden',
+    marginBottom: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E3A8A',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.08,
+        shadowRadius: 16,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
   },
-  touchableArea: {
+  coverWrapper: {
+    height: 90,
     width: '100%',
-  },
-  innerLayout: {
-    padding: 16,
     position: 'relative',
+    backgroundColor: '#1E3A8A',
   },
-  badgeCorner: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 99,
-    borderWidth: 1,
-    zIndex: 10,
-  },
-  awardIcon: {
-    marginRight: 3,
-  },
-  badgeCornerText: {
-    fontSize: 9,
-    fontWeight: '700',
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Inter',
-  },
-  headerContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  logoWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: BRAND.neutralBorder,
-    overflow: 'hidden',
-  },
-  schoolLogo: {
+  coverImage: {
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
   },
-  initialsBg: {
+  coverPlaceholder: {
     width: '100%',
-    height: '150%',
-    backgroundColor: BRAND.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    height: '100%',
+    backgroundColor: '#1E3A8A',
   },
-  initialsText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+  coverOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
   },
-  ratingBox: {
-    alignItems: 'flex-end',
-  },
-  stars: {
-    fontSize: 11,
-    color: BRAND.alert,
-    letterSpacing: 0.5,
-  },
-  noteRating: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: BRAND.textMuted,
-    marginTop: 1,
-  },
-  contentBody: {
-    gap: 6,
-  },
-  schoolTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: BRAND.textMain,
-    lineHeight: 18,
-    marginBottom: 2,
-  },
-  typeTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 4,
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
-    paddingVertical: 2.5,
-    borderRadius: 6,
-  },
-  typeText: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: BRAND.primary,
-  },
-  codeTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 4,
-    backgroundColor: '#ECFDF5',
+  premiumBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: '#FEF3C7',
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 6,
+    borderRadius: 99,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
   },
-  codeText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: BRAND.success,
+  premiumIcon: {
+    marginRight: 3,
+  },
+  premiumBadgeText: {
+    fontSize: 7.5,
+    fontWeight: '800',
+    color: '#B45309',
+    letterSpacing: 0.5,
+  },
+  systemTag: {
+    position: 'absolute',
+    bottom: 6,
+    left: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  systemTagText: {
+    fontSize: 7,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  cardBody: {
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
+  avatarRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginTop: -22,
+    marginBottom: 6,
+  },
+  logoFrame: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 3,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
+  },
+  logoImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  logoPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#1E3A8A',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  logoPlaceholderText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  ratingContainer: {
+    alignItems: 'flex-end',
+  },
+  starsRow: {
+    flexDirection: 'row',
+    gap: 1,
+  },
+  starFill: {
+    marginRight: 1,
+  },
+  ratingText: {
+    fontSize: 8,
+    color: '#64748B',
+    fontWeight: 'bold',
+    marginTop: 2,
+  },
+  schoolName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+    lineHeight: 17,
+    marginBottom: 6,
+  },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginBottom: 8,
+  },
+  badgeCycle: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  badgeCycleText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  badgeAccessCode: {
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  badgeAccessCodeText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#059669',
   },
   locationContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
+    marginBottom: 10,
+  },
+  pinIcon: {
+    marginRight: 4,
   },
   locationText: {
-    fontSize: 10.5,
-    color: BRAND.textMuted,
+    fontSize: 10,
+    color: '#475569',
+    fontWeight: '500',
   },
   metricsWrapper: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F8FAFC',
     borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-    marginTop: 6,
+    padding: 6,
     borderWidth: 1,
-    borderColor: '#F3F4F6',
-  },
-  metricCard: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  mValue: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: BRAND.textMain,
-    marginTop: 2,
-  },
-  mLabel: {
-    fontSize: 8.5,
-    color: BRAND.textMuted,
-    marginTop: 1.5,
-  },
-  optionsEncart: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderColor: BRAND.neutralBorder,
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: '#FCFDFF',
-    marginTop: 4,
-    gap: 6,
-  },
-  optionsText: {
-    fontSize: 9,
-    color: BRAND.textMuted,
-    flex: 1,
-  },
-  descriptionText: {
-    fontSize: 10.5,
-    lineHeight: 14,
-    color: BRAND.textMuted,
-    marginTop: 2,
-  },
-  footerActions: {
-    flexDirection: 'row',
+    borderColor: '#F1F5F9',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-    marginTop: 12,
-    paddingTop: 12,
+    marginBottom: 8,
   },
-  btnAction: {
+  metricItem: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 7,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    paddingVertical: 4,
+    marginHorizontal: 2,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  metricItemActive: {
+    backgroundColor: '#FFF1F2',
+    borderColor: '#FECDD3',
+  },
+  metricValue: {
+    fontSize: 10,
+    fontWeight: '905',
+    color: '#0F172A',
+    marginTop: 2,
+  },
+  metricValueActive: {
+    color: '#E11D48',
+  },
+  metricLabel: {
+    fontSize: 6.5,
+    fontWeight: '750',
+    color: '#64748B',
+    marginTop: 1,
+  },
+  specialitiesRow: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    marginBottom: 8,
+  },
+  specialityBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#1E3A8A',
+    letterSpacing: 0.2,
+  },
+  descriptionText: {
+    fontSize: 9.5,
+    color: '#475569',
+    lineHeight: 13,
+    fontStyle: 'italic',
+    borderLeftWidth: 2,
+    borderLeftColor: '#CBD5E1',
+    paddingLeft: 6,
+    marginBottom: 2,
+  },
+  footerActions: {
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    padding: 8,
+    backgroundColor: '#F8FAFC',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  actionBtnSecondary: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
     borderRadius: 8,
-    gap: 4,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  btnOutline: {
-    backgroundColor: '#F3F4F6',
+  actionBtnSecondaryText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#475569',
   },
-  btnOutlineText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: BRAND.textMuted,
+  actionBtnSuccess: {
+    flex: 1.2,
+    backgroundColor: '#10B981',
+    borderRadius: 8,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  btnSuccess: {
-    backgroundColor: BRAND.success,
-  },
-  btnSuccessText: {
-    fontSize: 10,
-    fontWeight: '600',
+  actionBtnSuccessText: {
+    fontSize: 9,
+    fontWeight: '700',
     color: '#FFFFFF',
   },
-  btnPrimary: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
+  actionBtnPrimary: {
+    flex: 1.2,
+    backgroundColor: '#1E3A8A',
+    borderRadius: 8,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  btnPrimaryText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: BRAND.primary,
+  actionBtnPrimaryText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginRight: 2,
   },
+  arrowIcon: {
+    marginLeft: 1,
+  }
 });
