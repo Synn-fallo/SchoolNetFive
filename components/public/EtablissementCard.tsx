@@ -179,7 +179,7 @@ export default function EtablissementCard({
 
         {/* Tags d'Infrastructures & Cycles */}
         <View style={styles.tagsContainer}>
-          {cycles.map((cycle, index) => (
+          {(cycles || []).map((cycle, index) => (
             <View key={index} style={styles.badgeCycle}>
               <GraduationCap size={10} color="#2563EB" />
               <Text style={styles.badgeCycleText}>{cycle}</Text>
