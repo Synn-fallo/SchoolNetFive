@@ -22,7 +22,20 @@ import {
   Sparkles
 } from 'lucide-react-native';
 
-// --- TS TYPES INTERFACES ---
+// --- Fonction utilitaire pour parser les JSON arrays ---
+const parseJsonArray = (data: string | null | undefined): string[] => {
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
+  } catch (error) {
+    // Fallback pour données legacy ou erreurs
+    console.warn('parseJsonArray error:', error);
+    return [];
+  }
+};
+
 export interface EtablissementCardProps {
   id: string;
   name: string;
@@ -36,16 +49,14 @@ export interface EtablissementCardProps {
   successRate?: number;
   likes?: number;
   views?: number;
-  cycles?: string[];
+  cycles?: string;        // Maintenant: JSON string '["premier", "second"]'
   directAccessCode?: string;
-  specialities?: string[];
+  specialities?: string;  // Même format JSON si applicable
   description?: string;
   onPressVitrine?: (id: string, slug?: string) => void;
   onPressRegister?: (id: string) => void;
   onLikePress?: (id: string) => void;
 }
-
-const { width } = Dimensions.get('window');
 
 export default function EtablissementCard({
   id,
@@ -60,9 +71,9 @@ export default function EtablissementCard({
   successRate = 0,
   likes = 0,
   views = 0,
-  cycles = [],
+  cycles,
   directAccessCode,
-  specialities = [],
+  specialities,
   description,
   onPressVitrine,
   onPressRegister,
@@ -72,6 +83,10 @@ export default function EtablissementCard({
   const [hasLiked, setHasLiked] = useState(false);
   const [localLikes, setLocalLikes] = useState(likes);
   const [copied, setCopied] = useState(false);
+
+  // Parser les JSON arrays
+  const cyclesArray = parseJsonArray(cycles);
+  const specialitiesArray = parseJsonArray(specialities);
 
   // Gérer le clic sur le bouton J'aime
   const handleLike = () => {
@@ -122,16 +137,13 @@ export default function EtablissementCard({
         ) : (
           <View style={styles.coverPlaceholder} />
         )}
-        {/* Filtre d'ombrage élégant */}
         <View style={styles.coverOverlay} />
 
-        {/* Badge Prestige / Homologation */}
         <View style={styles.premiumBadge}>
           <Award size={10} color="#D97706" style={styles.premiumIcon} />
           <Text style={styles.premiumBadgeText}>PRESTIGE ÉLITE</Text>
         </View>
 
-        {/* Tag d'homologation secondaire discret */}
         <View style={styles.systemTag}>
           <Sparkles size={8} color="#FBBF24" />
           <Text style={styles.systemTagText}>Établissement Agréé</Text>
@@ -141,7 +153,6 @@ export default function EtablissementCard({
       {/* 2. Contenu Principal de la Carte */}
       <View style={styles.cardBody}>
         
-        {/* Zone Logo chevauchant & Évaluation */}
         <View style={styles.avatarRow}>
           <View style={styles.logoFrame}>
             {logoUrl ? (
@@ -159,7 +170,6 @@ export default function EtablissementCard({
             )}
           </View>
           
-          {/* Étoiles d'évaluation intégrées de façon moderne */}
           <View style={styles.ratingContainer}>
             <View style={styles.starsRow}>
               <Sparkles size={10} color="#F59E0B" style={styles.starFill} />
@@ -172,21 +182,19 @@ export default function EtablissementCard({
           </View>
         </View>
 
-        {/* Nom de l'établissement */}
         <Text style={styles.schoolName} numberOfLines={2}>
           {name || "Nom de l'établissement"}
         </Text>
 
-        {/* Tags d'Infrastructures & Cycles */}
+        {/* Tags d'Infrastructures & Cycles - VERSION CORRIGÉE */}
         <View style={styles.tagsContainer}>
-          {(cycles || []).map((cycle, index) => (
+          {cyclesArray.map((cycle, index) => (
             <View key={index} style={styles.badgeCycle}>
               <GraduationCap size={10} color="#2563EB" />
               <Text style={styles.badgeCycleText}>{cycle}</Text>
             </View>
           ))}
           
-          {/* Badge Code d'Accès Direct */}
           {directAccessCode && (
             <View style={styles.badgeAccessCode}>
               <Text style={styles.badgeAccessCodeText}>Code : {directAccessCode}</Text>
@@ -202,17 +210,14 @@ export default function EtablissementCard({
           </Text>
         </View>
 
-        {/* 3. GRILLE DE MÉTRIQUES REORGANISÉE (Aucune donnée perdue) */}
+        {/* Métriques */}
         <View style={styles.metricsWrapper}>
-          
-          {/* Taux de Réussite officiel */}
           <View style={styles.metricItem}>
             <TrendingUp size={12} color="#10B981" />
             <Text style={styles.metricValue}>{successRate}%</Text>
             <Text style={styles.metricLabel}>RÉUSSITE</Text>
           </View>
 
-          {/* Nombre de Likes interactif */}
           <TouchableOpacity 
             onPress={handleLike} 
             activeOpacity={0.7} 
@@ -225,44 +230,38 @@ export default function EtablissementCard({
             <Text style={styles.metricLabel}>J'AIME</Text>
           </TouchableOpacity>
 
-          {/* Compteur de Vues */}
           <View style={styles.metricItem}>
             <Eye size={12} color="#0EA5E9" />
             <Text style={styles.metricValue}>{formatCompact(views)}</Text>
             <Text style={styles.metricLabel}>VUES</Text>
           </View>
 
-          {/* Spécialité générale / Cycle */}
           <View style={styles.metricItem}>
             <GraduationCap size={12} color="#4F46E5" />
             <Text style={styles.metricValue} numberOfLines={1}>Général</Text>
             <Text style={styles.metricLabel}>STATUT</Text>
           </View>
-
         </View>
 
-        {/* Ligne des séries & spécialités si existantes */}
-        {specialities.length > 0 && (
+        {/* Spécialités */}
+        {specialitiesArray.length > 0 && (
           <View style={styles.specialitiesRow}>
             <Text style={styles.specialityBadgeText} numberOfLines={1}>
-              🔬 {specialities.join('  •  ').toUpperCase()}
+              🔬 {specialitiesArray.join('  •  ').toUpperCase()}
             </Text>
           </View>
         )}
 
-        {/* Petite description stylisée avec barrière visuelle */}
+        {/* Description */}
         {description && (
           <Text style={styles.descriptionText} numberOfLines={2}>
             {description}
           </Text>
         )}
-
       </View>
 
-      {/* 4. ZONE D'ACTIONS ACTIONNABLES ET STRATÉGIQUES */}
+      {/* Footer Actions */}
       <View style={styles.footerActions}>
-        
-        {/* Bouton Partager */}
         <TouchableOpacity 
           style={styles.actionBtnSecondary} 
           onPress={handleShare}
@@ -271,7 +270,6 @@ export default function EtablissementCard({
           <Text style={styles.actionBtnSecondaryText}>Partager</Text>
         </TouchableOpacity>
 
-        {/* Bouton S'inscrire */}
         {onPressRegister && (
           <TouchableOpacity 
             style={styles.actionBtnSuccess} 
@@ -282,7 +280,6 @@ export default function EtablissementCard({
           </TouchableOpacity>
         )}
 
-        {/* Bouton Vitrine */}
         <TouchableOpacity 
           style={styles.actionBtnPrimary} 
           onPress={() => onPressVitrine && onPressVitrine(id, slug)}
@@ -291,9 +288,7 @@ export default function EtablissementCard({
           <Text style={styles.actionBtnPrimaryText}>Vitrine</Text>
           <ChevronRight size={12} color="#FFFFFF" style={styles.arrowIcon} />
         </TouchableOpacity>
-
       </View>
-
     </View>
   );
 }
